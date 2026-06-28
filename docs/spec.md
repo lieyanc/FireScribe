@@ -4,20 +4,21 @@
 
 ## 目标
 
-构建一个本地优先的手写扫描稿数字化工具。后端使用 Go，前端使用 React、TypeScript 和 shadcn/ui，数据使用 SQLite，原始文件单独存储，数据库保留索引、元数据、任务状态、识别结果和人工校对版本。
+构建一个面向个人和小型档案整理场景的手写扫描稿数字化工具。后端使用 Go，前端使用 React、TypeScript 和 shadcn/ui，数据使用 SQLite，原始文件单独存储，数据库保留索引、元数据、任务状态、识别结果和人工校对版本。
 
 ## 已对齐约束
 
 - 后端使用 Go。
 - 前端使用 React、TypeScript 和 shadcn/ui。
-- OCR、LLM 和 VLM 通过用户自有 API 中转接入，中转层可连接多个 OCR provider，以及兼容 LLM/VLM 格式的模型接口。
+- OCR/VLM 初版只对接 OpenAI 兼容格式的 API（base URL、API key、model、图文输入、文本输出），不再设计独立 OCR 中转协议。
 - 首批内容以中文手写文章为主，默认是正常文章形态，不优先处理复杂版式、竖排和表格。
 - 初版追溯粒度按原始页码处理，不要求 OCR 模型输出行级、段级或区域级坐标，避免增加识别负担。
 - provider 返回的原始元数据需要完整保留，包括原始响应、置信度、坐标、版面信息、模型参数等可用字段，供后续增强使用。
 - 导出保留格式应多种可选，初版先实现 TXT 和 Markdown，后续扩展 DOCX、PDF 审校版、带批注版本和干净定稿版本。
-- 页面图优先直接提取 PDF 内嵌图像，保留原始格式与原始数据，不重新栅格化为 PNG；只有矢量/文本型 PDF 页才回退渲染。
-- 每个 page 都需要全链路可追溯（原件 → 页面图 → 识别 run/result → 文本版本 → 批注）和详细状态可见。
+- 已确认首批 PDF 每页都是单独图片，初版按页码直接提取原始页面图并用于展示和识别，不重新栅格化为 PNG，也不为矢量/文本 PDF 设计复杂回退。
+- 每个 page 都需要全链路可追溯（原件 → 页面图 → 识别 run/result → 文本版本；后续再接批注）和详细状态可见。
 - FTS5 使用 trigram 分词以支持中文子串检索（默认 unicode61 不切中文）。
+- MVP 暂不包含批注系统、存疑标记和项目层级；这些能力后置。
 
 ## 非目标
 
@@ -27,22 +28,24 @@
 - 完整排版还原
 - 多人协作权限系统
 - 云端同步
+- 完全离线 OCR/VLM 模式
 - 自训练 OCR 模型
 - 对所有 OCR/VLM provider 的一次性支持
+- MVP 内的批注系统、存疑标记和项目层级
 
 ## 推荐技术栈
 
 ### 后端
 
 - Go 1.22+
-- HTTP API：`net/http` + `chi` 或标准库路由
-- SQLite：WAL 模式，启用 FTS5
-- SQL 管理：`sqlc` 或轻量手写 repository
-- 数据迁移：`goose`、`atlas` 或项目内简单 migration runner
+- HTTP API：`net/http` + `chi`
+- SQLite：`github.com/mattn/go-sqlite3`，WAL 模式，启用 FTS5/trigram
+- SQL 管理：`sqlc`
+- 数据迁移：`goose`
 - 后台任务：初版使用进程内 worker + SQLite `jobs` 表
-- 文件处理：外部工具或库处理 PDF 渲染、图片缩略图和预处理
+- 文件处理：Poppler `pdfimages`/`pdfinfo` 按页提取 PDF 原始图片，Go 图像库生成缩略图
 
-SQLite driver 需要在工程启动时确认。若优先 FTS5 和成熟生态，可用 `github.com/mattn/go-sqlite3`；若优先纯 Go 分发，再评估 `modernc.org/sqlite` 对目标功能的支持。
+选型理由：`mattn/go-sqlite3` 对 SQLite 原生能力、FTS5 和 trigram 支持更稳；FireScribe 初版优先可靠性，不优先纯 Go 分发。
 
 ### 前端
 
@@ -53,7 +56,7 @@ SQLite driver 需要在工程启动时确认。若优先 FTS5 和成熟生态，
 - Tailwind CSS
 - TanStack Query：服务端状态、列表、任务轮询
 - Zustand 或 React state：校对界面局部状态
-- PDF/图片查看：初版直接展示后端生成的页面 PNG
+- PDF/图片查看：初版直接展示提取出的原始页面图，缩略图单独生成 JPEG
 
 ### 存储
 
@@ -64,12 +67,12 @@ data/
     ab/cd/<sha256>.<ext>
   pages/
     <document_id>/
-      page-0001.<ext>   # 保留 PDF 内嵌图像原始格式，不重新编码
+      page-0001.<ext>   # 按页码提取的原始页面图，不重新编码
       page-0002.<ext>
   thumbs/
     <document_id>/
       page-0001.jpg
-  crops/
+  crops/                 # 后续区域批注/切图再启用
     <region_id>.png
   exports/
     <export_id>/
@@ -79,7 +82,7 @@ data/
 
 数据库只存路径、hash、metadata、索引和状态，不存大型原图 blob。
 
-页面图直接提取 PDF 内嵌图像，保留原始格式与原始数据，不重新栅格化为 PNG；只有矢量/文本型 PDF 页才回退渲染。缩略图是唯一会重新编码的派生物（小尺寸 JPEG）。
+页面图直接按页码提取 PDF 中的原始图片，保留原始格式与原始数据，不重新栅格化为 PNG。缩略图是唯一会重新编码的派生物（小尺寸 JPEG）。
 
 ## 后端模块
 
@@ -106,9 +109,9 @@ web/
 - `db`：SQLite 查询、migration、事务。
 - `storage`：原件、页面图、缩略图、导出文件的路径和读写。
 - `importer`：PDF/图片导入、hash、去重、文档创建。
-- `pageproc`：页面图像提取（优先提取 PDF 内嵌图像、保留原始格式；矢量/文本页回退栅格化）、缩略图、基础预处理。
-- `recognizer`：OCR/VLM provider 适配器。
-- `review`：候选稿、人工文本版本、批注。
+- `pageproc`：按页码提取 PDF 原始页面图、登记图片页、生成缩略图。
+- `recognizer`：OpenAI 兼容 OCR/VLM API 适配器。
+- `review`：候选稿、人工文本版本、定稿状态。
 - `exporter`：TXT、Markdown、后续 DOCX 导出。
 - `jobs`：任务队列、重试、日志。
 
@@ -116,11 +119,12 @@ web/
 
 设计原则：数据库保持**可靠简洁**——表只存必要字段，表之间关系靠显式外键表达，跨表的聚合状态用视图计算，而不是在行里维护容易不一致的冗余计数器。
 
-### 外键与资产回收（提醒，方案待定）
+### 外键与资产回收策略
 
-- 上面的表结构用逻辑字段表达关系，但还没有写 `REFERENCES`/`FOREIGN KEY`。SQLite **默认不启用**外键约束，需要在每个连接初始化时执行 `PRAGMA foreign_keys=ON`（并建议 `PRAGMA busy_timeout`），否则删除文档会留下孤儿 pages / results / assets。
-- 派生资产（`page_image`/`thumbnail`/`crop`/`export`）按 sha256 共享，删除文档时**不能简单级联删 asset**，需要一套引用计数或显式回收方案。
-- 具体策略（是否开启 FK、回收时机、是否软删）在 M0/M1 落地时再定，**初版 spec 不锁死**。
+- M0 起开启 SQLite 外键约束：每个连接初始化执行 `PRAGMA foreign_keys=ON`、`PRAGMA busy_timeout=5000`，并启用 WAL。
+- migration 中为 `documents`、`pages`、`recognition_runs`、`recognition_results`、`text_versions`、`document_assets`、`document_tags` 写显式 `REFERENCES`。
+- 删除文档时级联删除页面、识别运行、识别结果、文本版本和标签关联；`assets` 不级联删除，避免误删被其他文档复用的文件。
+- 未被任何表引用的 asset 由后续 `asset_gc` 任务回收，MVP 可以先只登记为孤立资产、不立刻物理删除文件。
 
 ### documents
 
@@ -158,7 +162,7 @@ CREATE TABLE assets (
 );
 ```
 
-`kind` 可取：`original`、`page_image`、`thumbnail`、`crop`、`export`。
+`kind` 可取：`original`、`page_image`、`thumbnail`、`export`；`crop` 后续配合区域批注再启用。
 
 ### document_assets
 
@@ -166,8 +170,8 @@ CREATE TABLE assets (
 
 ```sql
 CREATE TABLE document_assets (
-  document_id TEXT NOT NULL,
-  asset_id TEXT NOT NULL,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE RESTRICT,
   role TEXT NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY (document_id, asset_id, role)
@@ -181,10 +185,10 @@ CREATE TABLE document_assets (
 ```sql
 CREATE TABLE pages (
   id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   page_no INTEGER NOT NULL,
-  image_asset_id TEXT,
-  thumb_asset_id TEXT,
+  image_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+  thumb_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
   width INTEGER NOT NULL DEFAULT 0,
   height INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,
@@ -201,7 +205,7 @@ CREATE TABLE pages (
 ```sql
 CREATE TABLE recognition_runs (
   id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   prompt_version TEXT NOT NULL DEFAULT '',
@@ -220,8 +224,8 @@ CREATE TABLE recognition_runs (
 ```sql
 CREATE TABLE recognition_results (
   id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  page_id TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES recognition_runs(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
   text TEXT NOT NULL,
   confidence REAL,
   raw_json TEXT NOT NULL DEFAULT '{}',
@@ -237,11 +241,11 @@ CREATE TABLE recognition_results (
 ```sql
 CREATE TABLE text_versions (
   id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
-  page_id TEXT,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  page_id TEXT REFERENCES pages(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
-  base_version_id TEXT,
-  source_result_id TEXT,
+  base_version_id TEXT REFERENCES text_versions(id) ON DELETE SET NULL,
+  source_result_id TEXT REFERENCES recognition_results(id) ON DELETE SET NULL,
   text TEXT NOT NULL,
   status TEXT NOT NULL,
   created_by TEXT NOT NULL DEFAULT 'system',
@@ -251,16 +255,16 @@ CREATE TABLE text_versions (
 
 `kind` 可取：`raw_selected`、`candidate`、`manual`、`final`。
 
-### annotations
+### annotations（M5 后续）
 
-批注和存疑项。
+批注和存疑项。MVP 暂不实现，数据模型先作为后续扩展参考。
 
 ```sql
 CREATE TABLE annotations (
   id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
-  page_id TEXT,
-  text_version_id TEXT,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  page_id TEXT REFERENCES pages(id) ON DELETE CASCADE,
+  text_version_id TEXT REFERENCES text_versions(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
   body TEXT NOT NULL,
@@ -282,7 +286,7 @@ CREATE TABLE annotations (
 }
 ```
 
-坐标初版使用页面图像像素坐标，并在 `pages` 表保存宽高。后续如有多尺寸渲染，可以补充归一化坐标。
+坐标使用页面图像像素坐标，并在 `pages` 表保存宽高。后续如有多尺寸展示图，可以补充归一化坐标。
 
 ### jobs
 
@@ -315,8 +319,8 @@ CREATE TABLE tags (
 );
 
 CREATE TABLE document_tags (
-  document_id TEXT NOT NULL,
-  tag_id TEXT NOT NULL,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
   PRIMARY KEY (document_id, tag_id)
 );
 ```
@@ -336,7 +340,7 @@ CREATE VIRTUAL TABLE text_search USING fts5(
 );
 ```
 
-分词说明：SQLite FTS5 默认的 `unicode61` **不切中文**，一整句无空格的中文会被当成单个 token，`MATCH` 搜不到子串。改用 `trigram`（SQLite 3.34+ 自带）按 3 字符子串建索引，可支持中文子串检索，索引约为原文的 3 倍，本地量级可接受。注意 trigram 对 1~2 字短词召回差，单字/双字查询必要时用 `LIKE` 兜底；若后续需要词级召回再评估 jieba/ICU 分词。
+分词说明：SQLite FTS5 默认的 `unicode61` **不切中文**，一整句无空格的中文会被当成单个 token，`MATCH` 搜不到子串。改用 `trigram`（SQLite 3.34+ 自带）按 3 字符子串建索引，可支持中文子串检索，索引约为原文的 3 倍，个人文档量级可接受。注意 trigram 对 1~2 字短词召回差，单字/双字查询必要时用 `LIKE` 兜底；若后续需要词级召回再评估 jieba/ICU 分词。
 
 FTS 更新策略：
 
@@ -358,11 +362,10 @@ document
        ├─ page_image asset (提取自 PDF / 登记的图片)
        ├─ thumb asset
        ├─ recognition_result × N ──> recognition_run (provider / model / prompt_version / config / 原始返回)
-       ├─ text_version × N (candidate / manual / final；base_version_id + source_result_id 保留血缘)
-       └─ annotation × N (open / resolved / ignored；anchor_json 指向页面或区域)
+       └─ text_version × N (candidate / manual / final；base_version_id + source_result_id 保留血缘)
 ```
 
-任何一环都能回到 page 和 document：原件与页面图通过 `document_assets`/`pages` 关联，识别结果带所属 run 的 provider/model/prompt，文本版本带来源 result 和 base version 血缘，批注带 `page_id`/`text_version_id`。这些关系一旦写成显式外键（见上文「外键与资产回收」），整条链路即可双向导航。
+任何一环都能回到 page 和 document：原件与页面图通过 `document_assets`/`pages` 关联，识别结果带所属 run 的 provider/model/prompt，文本版本带来源 result 和 base version 血缘。M5 批注启用后，批注再通过 `page_id`/`text_version_id` 接入同一链路。
 
 ### 追踪索引
 
@@ -371,14 +374,15 @@ document
 ```sql
 CREATE INDEX idx_recognition_results_page ON recognition_results(page_id);
 CREATE INDEX idx_text_versions_page       ON text_versions(page_id);
-CREATE INDEX idx_annotations_page         ON annotations(page_id);
 CREATE INDEX idx_recognition_runs_doc     ON recognition_runs(document_id);
 CREATE INDEX idx_text_versions_doc        ON text_versions(document_id);
 ```
 
+M5 批注启用后补充 `idx_annotations_page`。
+
 ### 详细状态显示
 
-`pages.status` 只表达粗粒度生命周期（`new`/`rendered`/`recognized`/...）。页面详情（识别次数、最近一次 provider/model、最高置信度、是否有 candidate/manual/final、未关闭批注数）用只读视图聚合，不在 `pages` 上维护冗余计数器，避免写路径复杂化：
+`pages.status` 只表达粗粒度生命周期（`new`/`extracted`/`recognized`/...）。页面详情（识别次数、最近一次 provider/model、最高置信度、是否有 candidate/manual/final）用只读视图聚合，不在 `pages` 上维护冗余计数器，避免写路径复杂化：
 
 ```sql
 CREATE VIEW page_details AS
@@ -401,12 +405,11 @@ SELECT
   EXISTS(SELECT 1 FROM text_versions v WHERE v.page_id = p.id AND v.kind = 'candidate') AS has_candidate,
   EXISTS(SELECT 1 FROM text_versions v WHERE v.page_id = p.id AND v.kind = 'manual')    AS has_manual,
   EXISTS(SELECT 1 FROM text_versions v WHERE v.page_id = p.id AND v.kind = 'final')     AS has_final,
-  (SELECT COUNT(*) FROM annotations a WHERE a.page_id = p.id AND a.status = 'open')     AS open_annotation_count,
   p.updated_at
 FROM pages p;
 ```
 
-前端文档详情页 / 校对页直接读这个视图即可得到一页的完整状态面板。本地量级（数千页内）SQLite 即时计算足够，后续如有性能需要再考虑缓存或物化。
+前端文档详情页 / 校对页直接读这个视图即可得到一页的完整状态面板。数千页内 SQLite 即时计算足够，后续如有性能需要再考虑缓存或物化。
 
 ## 状态枚举
 
@@ -423,12 +426,13 @@ FROM pages p;
 ### page status
 
 - `new`
-- `rendered`
+- `extracted`
 - `recognized`
 - `reviewing`
 - `verified`
-- `uncertain`
 - `failed`
+
+M5 存疑标记启用后可增加 `uncertain`。
 
 ### job status
 
@@ -438,7 +442,7 @@ FROM pages p;
 - `failed`
 - `canceled`
 
-### annotation status
+### annotation status（M5 后续）
 
 - `open`
 - `resolved`
@@ -471,14 +475,14 @@ type Recognizer interface {
 }
 ```
 
-识别器配置建议放在 `config.yaml` 或环境变量中，密钥不入库、不提交。初版 provider 适配器优先对接用户自有 API 中转，不直接绑定某个 OCR/VLM 厂商 SDK。中转返回应至少规范化出文本、可选置信度和原始响应；其他 provider 特有字段放入 raw metadata 保存。
+识别器配置建议放在 `config.yaml` 或环境变量中，密钥不入库、不提交。初版只实现 OpenAI 兼容适配器，不直接绑定某个 OCR/VLM 厂商 SDK。配置至少包含 `base_url`、`api_key_env`、`model`、`prompt_version`、超时和模型参数；请求把页面原始图作为图文输入发送，响应至少规范化出文本、可选置信度和原始 JSON，其他字段完整保存在 raw metadata 中。
 
 ## 任务类型
 
 初版任务：
 
 - `import_document`
-- `render_pages`
+- `extract_pages`
 - `generate_thumbnails`
 - `recognize_page`
 - `recognize_document`
@@ -531,7 +535,9 @@ POST /api/pages/{pageID}/text-versions
 GET  /api/documents/{documentID}/final-text
 ```
 
-### 批注
+### 批注（M5 后续）
+
+MVP 暂不实现批注 API。
 
 ```text
 GET   /api/documents/{documentID}/annotations
@@ -582,7 +588,6 @@ POST /api/jobs/{jobID}/cancel
 - 页列表
 - 识别运行列表
 - 导出入口
-- 批注摘要
 
 ### 校对页
 
@@ -597,7 +602,7 @@ POST /api/jobs/{jobID}/cancel
 |                             | 文本编辑器                |
 |                             |                           |
 +-----------------------------+---------------------------+
-| 批注 / 存疑 / 差异 / 任务状态                            |
+| 识别详情 / 任务状态                                      |
 +---------------------------------------------------------+
 ```
 
@@ -606,7 +611,6 @@ POST /api/jobs/{jobID}/cancel
 - 上一页 / 下一页
 - 保存当前页人工文本
 - 标记已确认
-- 标记存疑
 - 切换不同识别结果
 - 从识别结果复制为候选稿
 
@@ -616,7 +620,6 @@ POST /api/jobs/{jobID}/cancel
 - `J` 下一页
 - `K` 上一页
 - `V` 标记已确认
-- `U` 标记存疑
 
 ### 任务页
 
@@ -658,7 +661,7 @@ VLM 调用必须记录：
 - input image id
 - parameters
 - raw response
-- 中转请求 id 或 trace id，如果 API 中转提供
+- OpenAI 兼容 API 返回的 response id、request id 或 trace id（如果提供）
 
 初版 prompt 可以放在代码或 `prompts/` 目录，命名例如：
 
@@ -678,9 +681,9 @@ prompts/
 
 ## 安全与隐私
 
-- 默认本地运行。
-- 原始扫描稿不上传，除非用户显式启用云端 OCR/VLM provider。
-- API key 使用环境变量或本地配置文件，加入 `.gitignore`。
+- 默认单人使用，暂不设计远程共享能力。
+- 识别时页面原始图会发送到配置的 OpenAI 兼容 API；除此之外不做额外同步或上传。
+- API key 使用环境变量或配置文件，加入 `.gitignore`。
 - 导出文件放在 `data/exports`，由用户主动下载或打开。
 - 后续如支持远程访问，需要补认证和访问控制。
 
@@ -700,12 +703,11 @@ prompts/
 - 文档列表渲染
 - 校对页保存流程
 - 识别结果切换
-- 批注创建和状态修改
 
 端到端：
 
 - 导入一个小 PDF
-- 渲染页面
+- 提取页面图
 - mock OCR/VLM 生成结果
 - 保存人工定稿
 - 搜索命中
@@ -718,7 +720,7 @@ prompts/
 - Go server 启动
 - SQLite migration
 - React + shadcn/ui 前端
-- 本地配置和数据目录
+- 应用配置和数据目录
 
 ### M1：文档导入
 
@@ -730,8 +732,8 @@ prompts/
 ### M2：识别管线
 
 - recognizer 接口
-- 1 个 OCR provider
-- 1 个 VLM provider
+- 1 个 OpenAI 兼容 OCR/VLM 适配器
+- 至少 1 个模型配置
 - jobs 表和 worker
 - recognition runs/results 保存
 
@@ -757,14 +759,17 @@ prompts/
 
 ## 开放问题
 
-- 是否需要支持完全离线模式？
 - 是否需要为某个作者建立术语表、常见字词表或人名地名表？
-- 默认导出配置如何排序：页码、存疑标记、批注、合并导出分别默认开还是关？
-- 外键约束与派生资产回收的具体策略（是否开启 FK、回收时机、是否软删）——见「外键与资产回收」。
+- 默认导出配置如何排序：页码默认开还是关，后续存疑标记、批注、合并导出默认如何处理？
 
 ## 已关闭问题
 
-- 初版形态：先按本地 Web 应用推进，后续如有需要再封装桌面应用。
-- OCR/VLM 接入：通过用户自有 API 中转接入多个 OCR 和兼容 LLM/VLM 格式的模型。
+- 初版形态：先按单人 Web 应用推进，后续如有需要再封装桌面应用。
+- 离线模式：不需要完全离线 OCR/VLM。
+- OCR/VLM 接入：初版只支持 OpenAI 兼容 API 格式。
+- 数据库选型：使用 `github.com/mattn/go-sqlite3`、`sqlc` 和 `goose`；外键和资产回收由应用管理。
+- 批注范围：MVP 暂不做批注系统和存疑标记，后置到 M5。
+- 页面处理：首批 PDF 每页都是单独图片，按页码提取原始图即可，不做复杂渲染回退。
+- 项目层级：后置，MVP 只做文档和标签。
 - 页面追溯：v1 按原始页码追踪，不强制行/段/区域坐标。
 - 导出能力：支持多种可选格式，初版先做 TXT 和 Markdown。
