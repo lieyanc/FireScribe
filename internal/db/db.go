@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed migrations/*.sql
@@ -23,7 +23,7 @@ func Open(path string) (*sql.DB, error) {
 	}
 
 	dsn := fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000", filepath.ToSlash(path))
-	conn, err := sql.Open("sqlite3", dsn)
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}

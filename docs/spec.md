@@ -475,7 +475,7 @@ type Recognizer interface {
 }
 ```
 
-识别器配置建议放在 `config.yaml` 或环境变量中，密钥不入库、不提交。初版只实现 OpenAI 兼容适配器，不直接绑定某个 OCR/VLM 厂商 SDK。配置至少包含 `base_url`、`api_key_env`、`model`、`prompt_version`、超时和模型参数；请求把页面原始图作为图文输入发送，响应至少规范化出文本、可选置信度和原始 JSON，其他字段完整保存在 raw metadata 中。
+识别器配置放在 `config.json` 中，默认配置模板内置在程序中并随二进制打包。启动时如果文件不存在会自动释放默认配置，版本新增配置项时会自动补齐缺失项。密钥不入库、不提交。初版只实现 OpenAI 兼容适配器，不直接绑定某个 OCR/VLM 厂商 SDK。配置至少包含 `base_url`、`api_key`、`model`、`prompt_version`、超时和模型参数；请求把页面原始图作为图文输入发送，响应至少规范化出文本、可选置信度和原始 JSON，其他字段完整保存在 raw metadata 中。
 
 ## 任务类型
 
@@ -683,7 +683,7 @@ prompts/
 
 - 默认单人使用，暂不设计远程共享能力。
 - 识别时页面原始图会发送到配置的 OpenAI 兼容 API；除此之外不做额外同步或上传。
-- API key 使用环境变量或配置文件，加入 `.gitignore`。
+- API key 写入本地 `config.json`，该文件加入 `.gitignore`。
 - 导出文件放在 `data/exports`，由用户主动下载或打开。
 - 后续如支持远程访问，需要补认证和访问控制。
 

@@ -1,0 +1,24 @@
+{
+  "addr": ":8080",
+  "data_dir": "data",
+  "database_path": "data/firescribe.db",
+  "web_dir": "web/dist",
+  "prompt_path": "prompts/vlm_transcribe_page_v1.txt",
+  "use_mock_ocr": true,
+  "request_timeout_seconds": 120,
+  "update": {
+    "enabled": false,
+    "channel": "stable",
+    "check_interval": 3600,
+    "proxy_base_url": "https://dl.repo.chycloud.top",
+    "repo": "lieyanc/FireScribe"
+  },
+  "openai": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "",
+    "prompt_version": "vlm_transcribe_page_v1",
+    "temperature": 0,
+    "max_tokens": 4096
+  }
+}

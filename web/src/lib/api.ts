@@ -115,6 +115,36 @@ export type ExportFile = {
   storage_path: string;
 };
 
+export type VersionInfo = {
+  version: string;
+  commit: string;
+  build_time: string;
+  update_channel?: string;
+  update_repo?: string;
+};
+
+export type UpdateStatus = {
+  state: string;
+  current_version: string;
+  latest_version?: string;
+  is_prerelease?: boolean;
+  progress?: number;
+  download_progress?: number;
+  error?: string;
+  last_check?: string;
+  release_notes?: string;
+};
+
+export type UpdateCheckResult = {
+  has_update: boolean;
+  current_version: string;
+  latest_version?: string;
+  is_prerelease?: boolean;
+  release_notes?: string;
+  channel: string;
+  error?: string;
+};
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
@@ -251,4 +281,24 @@ export function cancelJob(jobID: string) {
 
 export function retryJob(jobID: string) {
   return apiFetch<{ run: RecognitionRun; job: Job }>(`/api/jobs/${jobID}/retry`, { method: "POST" });
+}
+
+export function getVersion() {
+  return apiFetch<VersionInfo>("/api/version");
+}
+
+export function getUpdateStatus() {
+  return apiFetch<UpdateStatus>("/api/update/status");
+}
+
+export function checkUpdate() {
+  return apiFetch<UpdateCheckResult>("/api/update/check", { method: "POST" });
+}
+
+export function applyUpdate() {
+  return apiFetch<{ status: string }>("/api/update/apply", { method: "POST" });
+}
+
+export function dismissUpdate() {
+  return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST" });
 }

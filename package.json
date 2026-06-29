@@ -1,0 +1,13 @@
+{
+  "name": "firescribe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FireScribe Go server with a React/Vite frontend",
+  "scripts": {
+    "dev:web": "npm --prefix web run dev",
+    "build:web": "npm --prefix web run build",
+    "stage:web": "node scripts/stage-webdist.mjs",
+    "build": "npm run build:web && npm run stage:web && go build -tags sqlite_fts5 -o bin/firescribe ./cmd/firescribe-server",
+    "test": "go test -tags sqlite_fts5 ./..."
+  }
+}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,16 +17,20 @@ import (
 	"github.com/lieyan/firescribe/internal/db"
 	"github.com/lieyan/firescribe/internal/recognizer"
 	"github.com/lieyan/firescribe/internal/storage"
+	"github.com/lieyan/firescribe/internal/updater"
+	"github.com/lieyan/firescribe/internal/version"
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
 
 	conn, err := db.Open(cfg.DatabasePath)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
-	defer conn.Close()
 
 	if err := db.Migrate(conn); err != nil {
 		log.Fatalf("migrate database: %v", err)
@@ -38,33 +43,107 @@ func main() {
 
 	rec := buildRecognizer(cfg)
 	application := app.New(app.NewStore(conn), files, rec)
-	server := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           api.New(application, cfg.WebDir).Routes(),
-		ReadHeaderTimeout: 10 * time.Second,
+
+	bgCtx, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
+
+	var closeOnce sync.Once
+	closeResources := func() {
+		closeOnce.Do(func() {
+			_ = conn.Close()
+		})
+	}
+	defer closeResources()
+
+	var restartMu sync.Mutex
+	restarting := false
+	restartErrCh := make(chan error, 1)
+	markRestarting := func() {
+		restartMu.Lock()
+		restarting = true
+		restartMu.Unlock()
+	}
+	isRestarting := func() bool {
+		restartMu.Lock()
+		defer restartMu.Unlock()
+		return restarting
 	}
 
+	var server *http.Server
+	upd := updater.New(
+		func() updater.Config { return cfg.Update },
+		func() string { return cfg.DataDir },
+		log.Default(),
+		updater.RestartHooks{
+			BeforeExec: func(tag string) error {
+				markRestarting()
+				cancelBackground()
+
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					return err
+				}
+				closeResources()
+				log.Printf("update: prepared restart for %s", tag)
+				return nil
+			},
+			OnExecFailure: func(err error) {
+				select {
+				case restartErrCh <- err:
+				default:
+				}
+			},
+		},
+	)
+
+	server = &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           api.New(application, cfg.WebDir, api.UpdateRuntime{Updater: upd, Config: cfg.Update}).Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	upd.StartBackground(bgCtx)
+
+	errCh := make(chan error, 1)
 	go func() {
+		log.Printf("FireScribe %s (commit=%s, built=%s)", version.Version, version.Commit, version.BuildTime)
 		log.Printf("FireScribe listening on http://localhost%s", cfg.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("serve: %v", err)
+			errCh <- err
+			return
 		}
+		errCh <- http.ErrServerClosed
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shutdown: %v", err)
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			if isRestarting() {
+				if err := <-restartErrCh; err != nil {
+					log.Fatal(err)
+				}
+			}
+			return
+		}
+		log.Fatalf("serve: %v", err)
+	case <-stop:
+		cancelBackground()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+	case err := <-restartErrCh:
+		log.Fatal(err)
 	}
 }
 
 func buildRecognizer(cfg config.Config) recognizer.Recognizer {
 	if cfg.UseMockOCR {
-		log.Printf("OCR recognizer: mock (set FIRESCRIBE_USE_MOCK_OCR=false, FIRESCRIBE_OPENAI_MODEL and an API key to use OpenAI compatible OCR)")
+		log.Printf("OCR recognizer: mock (set use_mock_ocr=false, openai.model and openai.api_key in %s to use OpenAI compatible OCR)", cfg.Path)
 		return recognizer.MockRecognizer{}
 	}
 	prompt, err := os.ReadFile(cfg.PromptPath)

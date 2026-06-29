@@ -1,5 +1,12 @@
 data/
 .env
+config.json
+.bin/
+bin/
+dist/
+test/
+*.exe
+*.out
 *.db
 *.db-shm
 *.db-wal

@@ -1,29 +1,50 @@
 package api
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
+	urlpath "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/lieyan/firescribe/internal/app"
+	"github.com/lieyan/firescribe/internal/updater"
+	"github.com/lieyan/firescribe/internal/version"
 )
 
 type Server struct {
-	app    *app.App
-	webDir string
+	app       *app.App
+	webDir    string
+	webFS     fs.FS
+	updater   *updater.Updater
+	updateCfg updater.Config
 }
 
-func New(application *app.App, webDir string) *Server {
-	return &Server{app: application, webDir: webDir}
+type UpdateRuntime struct {
+	Updater *updater.Updater
+	Config  updater.Config
+}
+
+func New(application *app.App, webDir string, updateRuntime ...UpdateRuntime) *Server {
+	embedded, _ := embeddedStaticFS()
+	server := &Server{app: application, webDir: webDir, webFS: embedded}
+	if len(updateRuntime) > 0 {
+		server.updater = updateRuntime[0].Updater
+		server.updateCfg = updateRuntime[0].Config
+	}
+	return server
 }
 
 func (s *Server) Routes() http.Handler {
@@ -35,6 +56,11 @@ func (s *Server) Routes() http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
+		r.Get("/version", s.version)
+		r.Get("/update/status", s.updateStatus)
+		r.Post("/update/check", s.updateCheck)
+		r.Post("/update/apply", s.updateApply)
+		r.Post("/update/dismiss", s.updateDismiss)
 		r.Get("/documents", s.listDocuments)
 		r.Post("/documents/import", s.importDocument)
 		r.Get("/documents/{documentID}", s.getDocument)
@@ -73,6 +99,70 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) version(w http.ResponseWriter, r *http.Request) {
+	info := version.Info()
+	info["update_channel"] = normalizedUpdateChannel(s.updateCfg.Channel)
+	info["update_repo"] = strings.TrimSpace(s.updateCfg.Repo)
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "updater is not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.updater.Status())
+}
+
+func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "updater is not configured"})
+		return
+	}
+	result, err := s.updater.CheckOnly(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"has_update":      false,
+			"current_version": result.CurrentVersion,
+			"channel":         result.Channel,
+			"error":           err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "updater is not configured"})
+		return
+	}
+	status := s.updater.Status()
+	if status.State == "ready" {
+		if err := s.updater.ApplyPending(r.Context()); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "applying"})
+		return
+	}
+	if status.State == "checking" || status.State == "downloading" || status.State == "applying" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "update already in progress"})
+		return
+	}
+	s.updater.StartUpdate(r.Context())
+	writeJSON(w, http.StatusOK, map[string]string{"status": "update_started"})
+}
+
+func (s *Server) updateDismiss(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "updater is not configured"})
+		return
+	}
+	s.updater.DismissPending()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 
 func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
@@ -456,25 +546,92 @@ func (s *Server) staticFallback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if s.webDir == "" {
-		http.NotFound(w, r)
-		return
+	requestPath := cleanStaticPath(r.URL.Path)
+
+	if s.webDir != "" {
+		fullPath := filepath.Join(s.webDir, requestPath)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, fullPath)
+			return
+		}
+		indexPath := filepath.Join(s.webDir, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
 	}
-	requestPath := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
-	if requestPath == "." {
-		requestPath = "index.html"
-	}
-	fullPath := filepath.Join(s.webDir, requestPath)
-	if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-		http.ServeFile(w, r, fullPath)
-		return
-	}
-	indexPath := filepath.Join(s.webDir, "index.html")
-	if _, err := os.Stat(indexPath); err == nil {
-		http.ServeFile(w, r, indexPath)
+
+	if s.webFS != nil {
+		s.serveEmbeddedStatic(w, r, requestPath)
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func (s *Server) serveEmbeddedStatic(w http.ResponseWriter, r *http.Request, requestPath string) {
+	if requestPath == "" || requestPath == "." {
+		requestPath = "index.html"
+	}
+	requestPath = filepath.ToSlash(requestPath)
+	if info, err := fs.Stat(s.webFS, requestPath); err == nil && !info.IsDir() {
+		s.serveEmbeddedFile(w, r, requestPath)
+		return
+	}
+	s.serveEmbeddedFile(w, r, "index.html")
+}
+
+func (s *Server) serveEmbeddedFile(w http.ResponseWriter, r *http.Request, name string) {
+	data, err := fs.ReadFile(s.webFS, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if contentType := contentTypeFor(name); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, filepath.Base(name), time.Time{}, bytes.NewReader(data))
+}
+
+func cleanStaticPath(path string) string {
+	clean := urlpath.Clean("/" + strings.TrimPrefix(path, "/"))
+	rel := strings.TrimPrefix(clean, "/")
+	if rel == "" || rel == "." {
+		return "index.html"
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "index.html"
+		}
+	}
+	return filepath.FromSlash(rel)
+}
+
+func contentTypeFor(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js", ".mjs":
+		return "application/javascript; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return mime.TypeByExtension(filepath.Ext(name))
+	}
+}
+
+func normalizedUpdateChannel(channel string) string {
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	if channel == "" {
+		return "stable"
+	}
+	if channel != "stable" {
+		return "dev"
+	}
+	return channel
 }
 
 func firstUploadedFile(form *multipart.Form) (multipart.File, *multipart.FileHeader, error) {

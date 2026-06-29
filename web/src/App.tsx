@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NavLink, Route, Routes } from "react-router-dom";
-import { BookOpenText, BriefcaseBusiness, ListChecks } from "lucide-react";
+import { BookOpenText, BriefcaseBusiness, ListChecks, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { DocumentDetailPage } from "./pages/DocumentDetailPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { JobsPage } from "./pages/JobsPage";
+import { SystemPage } from "./pages/SystemPage";
 import { cn } from "./lib/utils";
 
 const queryClient = new QueryClient();
@@ -23,6 +24,7 @@ export function App() {
             <nav className="flex items-center gap-1">
               <NavItem to="/" icon={<BriefcaseBusiness className="h-4 w-4" />} label="文档" />
               <NavItem to="/jobs" icon={<ListChecks className="h-4 w-4" />} label="任务" />
+              <NavItem to="/system" icon={<RefreshCw className="h-4 w-4" />} label="系统" />
             </nav>
           </div>
         </header>
@@ -33,6 +35,7 @@ export function App() {
             <Route path="/review/:documentID" element={<ReviewPage />} />
             <Route path="/review/:documentID/:pageID" element={<ReviewPage />} />
             <Route path="/jobs" element={<JobsPage />} />
+            <Route path="/system" element={<SystemPage />} />
           </Routes>
         </main>
       </div>

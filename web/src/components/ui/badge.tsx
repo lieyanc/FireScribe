@@ -2,6 +2,9 @@ import { cn, statusLabel } from "../../lib/utils";
 
 const tone: Record<string, string> = {
   failed: "border-red-200 bg-red-50 text-red-700",
+  checking: "border-sky-200 bg-sky-50 text-sky-800",
+  downloading: "border-sky-200 bg-sky-50 text-sky-800",
+  applying: "border-amber-200 bg-amber-50 text-amber-800",
   recognizing: "border-amber-200 bg-amber-50 text-amber-800",
   running: "border-amber-200 bg-amber-50 text-amber-800",
   reviewing: "border-sky-200 bg-sky-50 text-sky-800",
