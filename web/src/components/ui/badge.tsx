@@ -1,27 +1,29 @@
 import { cn, statusLabel } from "../../lib/utils";
 
 const tone: Record<string, string> = {
-  failed: "border-red-200 bg-red-50 text-red-700",
-  checking: "border-sky-200 bg-sky-50 text-sky-800",
-  downloading: "border-sky-200 bg-sky-50 text-sky-800",
-  applying: "border-amber-200 bg-amber-50 text-amber-800",
-  recognizing: "border-amber-200 bg-amber-50 text-amber-800",
-  running: "border-amber-200 bg-amber-50 text-amber-800",
-  reviewing: "border-sky-200 bg-sky-50 text-sky-800",
-  ready: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  finalized: "border-teal-200 bg-teal-50 text-teal-800",
-  verified: "border-teal-200 bg-teal-50 text-teal-800",
-  succeeded: "border-teal-200 bg-teal-50 text-teal-800",
-  open: "border-amber-200 bg-amber-50 text-amber-800",
-  resolved: "border-teal-200 bg-teal-50 text-teal-800",
+  failed: "border-destructive/20 bg-destructive/10 text-destructive",
+  canceled: "border-destructive/20 bg-destructive/10 text-destructive",
+  checking: "border-primary/25 bg-primary/10 text-primary",
+  downloading: "border-primary/25 bg-primary/10 text-primary",
+  reviewing: "border-primary/25 bg-primary/10 text-primary",
+  ready: "border-primary/25 bg-primary/10 text-primary",
+  finalized: "border-primary/25 bg-primary/10 text-primary",
+  verified: "border-primary/25 bg-primary/10 text-primary",
+  succeeded: "border-primary/25 bg-primary/10 text-primary",
+  applying: "border-accent bg-accent text-accent-foreground",
+  recognizing: "border-accent bg-accent text-accent-foreground",
+  running: "border-accent bg-accent text-accent-foreground",
+  queued: "border-accent bg-accent text-accent-foreground",
+  open: "border-accent bg-accent text-accent-foreground",
+  resolved: "border-border bg-secondary text-secondary-foreground",
 };
 
 export function Badge({ value, className }: { value: string; className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex h-6 items-center rounded-md border px-2 text-xs font-medium",
-        tone[value] ?? "border-border bg-muted text-muted-foreground",
+        "inline-flex h-6 items-center rounded-md border px-2.5 text-xs font-semibold transition-colors",
+        tone[value] ?? "border-transparent bg-secondary text-secondary-foreground",
         className,
       )}
     >

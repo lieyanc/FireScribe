@@ -66,7 +66,7 @@ export function SystemPage() {
         </div>
       </section>
 
-      {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
 
       <section className="panel p-4">
         <div className="grid gap-3 md:grid-cols-2">
@@ -84,7 +84,7 @@ export function SystemPage() {
           <div className="flex items-center gap-2">
             <Badge value={snapshot?.state || "idle"} />
             {result?.has_update === false ? (
-              <span className="inline-flex items-center gap-1 text-sm text-teal-700">
+              <span className="inline-flex items-center gap-1 text-sm text-primary">
                 <CheckCircle2 className="h-4 w-4" />
                 已是最新
               </span>
@@ -95,7 +95,7 @@ export function SystemPage() {
         <div className="h-2 overflow-hidden rounded-full bg-muted">
           <div className="h-full bg-primary transition-all" style={{ width: `${Math.max(0, Math.min(progress, 100))}%` }} />
         </div>
-        {notes ? <pre className="mt-4 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-sm">{notes}</pre> : null}
+        {notes ? <pre className="mt-4 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted/70 p-3 text-sm">{notes}</pre> : null}
       </section>
     </div>
   );

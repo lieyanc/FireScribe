@@ -18,7 +18,7 @@ import {
   RecognitionResult,
   TextVersion,
 } from "../lib/api";
-import { formatTime, statusLabel } from "../lib/utils";
+import { cn, formatTime, statusLabel } from "../lib/utils";
 
 const kindRank: Record<string, number> = { final: 0, manual: 1, candidate: 2, raw_selected: 3 };
 
@@ -175,11 +175,11 @@ export function ReviewPage() {
         </div>
       </section>
 
-      {save.error ? <p className="text-sm text-red-700">{save.error.message}</p> : null}
+      {save.error ? <p className="text-sm text-destructive">{save.error.message}</p> : null}
 
       <section className="grid min-h-[calc(100vh-185px)] gap-3 lg:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
         <div className="panel flex min-h-[520px] flex-col overflow-hidden">
-          <div className="flex h-11 items-center justify-between border-b border-border px-3">
+          <div className="flex h-11 items-center justify-between border-b bg-muted/50 px-3">
             <div className="text-sm font-medium">原页</div>
             <div className="flex items-center gap-2">
               <ZoomIn className="h-4 w-4 text-muted-foreground" />
@@ -197,7 +197,7 @@ export function ReviewPage() {
               </Button>
             </div>
           </div>
-          <div className="flex flex-1 items-center justify-center overflow-auto bg-neutral-100 p-4">
+          <div className="flex flex-1 items-center justify-center overflow-auto bg-muted/60 p-4">
             {page.data ? (
               <img
                 src={page.data.image_url}
@@ -213,14 +213,17 @@ export function ReviewPage() {
 
         <div className="flex min-h-[520px] flex-col gap-3">
           <section className="panel overflow-hidden">
-            <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b border-border px-3 py-2">
+            <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b bg-muted/50 px-3 py-2">
               {results.data?.length ? (
                 results.data.map((result) => (
                   <button
                     key={result.id}
-                    className={`h-8 whitespace-nowrap rounded-md border px-2 text-xs ${
-                      selectedResultID === result.id ? "border-primary bg-primary text-white" : "border-border bg-white hover:bg-muted"
-                    }`}
+                    className={cn(
+                      "h-8 whitespace-nowrap rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      selectedResultID === result.id
+                        ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                        : "border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
+                    )}
                     onClick={() => setSelectedResultID(result.id)}
                   >
                     {result.provider ?? "OCR"} · {result.model ?? "model"}
@@ -234,7 +237,7 @@ export function ReviewPage() {
               {selectedResult(results.data ?? [], selectedResultID)?.text ?? results.data?.[0]?.text ?? ""}
             </div>
             {selectedResult(results.data ?? [], selectedResultID) ? (
-              <div className="border-t border-border px-3 py-2">
+              <div className="border-t px-3 py-2">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -264,7 +267,7 @@ export function ReviewPage() {
           </section>
 
           <section className="panel overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-3 py-2 text-sm font-medium">
+            <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2 text-sm font-medium">
               <span>批注</span>
               <div className="flex gap-2">
                 <Button variant="secondary" size="sm" onClick={() => addAnnotation.mutate("page_note")} disabled={addAnnotation.isPending}>
@@ -276,7 +279,7 @@ export function ReviewPage() {
                 </Button>
               </div>
             </div>
-            <div className="border-b border-border p-3">
+            <div className="border-b p-3">
               <Textarea
                 className="h-20"
                 placeholder="批注内容"
@@ -287,7 +290,7 @@ export function ReviewPage() {
             <div className="max-h-44 overflow-auto">
               {annotations.data?.length ? (
                 annotations.data.map((annotation) => (
-                  <div key={annotation.id} className="flex gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0">
+                  <div key={annotation.id} className="flex gap-3 border-b px-3 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <Badge value={annotation.status} />
@@ -312,11 +315,11 @@ export function ReviewPage() {
           </section>
 
           <section className="panel overflow-hidden">
-            <div className="border-b border-border px-3 py-2 text-sm font-medium">版本</div>
+            <div className="border-b bg-muted/50 px-3 py-2 text-sm font-medium">版本</div>
             <div className="max-h-40 overflow-auto">
               {versions.data?.length ? (
                 versions.data.map((version) => (
-                  <div key={version.id} className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0">
+                  <div key={version.id} className="flex items-center justify-between gap-3 border-b px-3 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40">
                     <span>
                       {statusLabel(version.kind)} · {statusLabel(version.status)}
                     </span>
@@ -368,7 +371,7 @@ function DiffView({ results }: { results: RecognitionResult[] }) {
   const segments = useMemo(() => diffChars(base.text, other.text), [base.text, other.text]);
   return (
     <section className="panel overflow-hidden">
-      <div className="border-b border-border px-3 py-2 text-sm font-medium">
+      <div className="border-b bg-muted/50 px-3 py-2 text-sm font-medium">
         分歧 · {base.model || base.provider} / {other.model || other.provider}
       </div>
       <div className="max-h-36 overflow-auto px-3 py-2 text-sm leading-7">
@@ -377,9 +380,9 @@ function DiffView({ results }: { results: RecognitionResult[] }) {
             key={`${segment.type}-${index}`}
             className={
               segment.type === "insert"
-                ? "bg-emerald-100 text-emerald-900"
+                ? "bg-primary/15 text-primary"
                 : segment.type === "delete"
-                  ? "bg-red-100 text-red-800 line-through"
+                  ? "bg-destructive/15 text-destructive line-through"
                   : ""
             }
           >

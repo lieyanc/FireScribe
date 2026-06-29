@@ -77,10 +77,10 @@ export function DocumentsPage() {
         </div>
       </section>
 
-      {upload.error ? <p className="text-sm text-red-700">{upload.error.message}</p> : null}
+      {upload.error ? <p className="text-sm text-destructive">{upload.error.message}</p> : null}
 
       <section className="panel overflow-hidden">
-        <div className="table-grid border-b border-border bg-muted px-3 py-2 text-xs font-medium text-muted-foreground">
+        <div className="table-grid border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
           <div>标题</div>
           <div>状态</div>
           <div>页数</div>
@@ -89,7 +89,7 @@ export function DocumentsPage() {
         </div>
         {documents.data?.length ? (
           documents.data.map((doc) => (
-            <div key={doc.id} className="table-grid items-center border-b border-border px-3 py-3 last:border-b-0">
+            <div key={doc.id} className="table-grid items-center border-b px-3 py-3 transition-colors last:border-b-0 hover:bg-muted/40">
               <Link to={`/documents/${doc.id}`} className="min-w-0 truncate font-medium hover:text-primary">
                 {doc.title}
               </Link>
@@ -123,7 +123,7 @@ export function DocumentsPage() {
                 <Link
                   key={`${result.text_version_id}-${result.page_id}`}
                   to={`/review/${result.document_id}/${result.page_id}`}
-                  className="block rounded-md border border-border bg-white px-3 py-2 text-sm hover:border-primary"
+                  className="block rounded-md border bg-card px-3 py-2 text-sm shadow-sm transition-colors hover:border-primary/50 hover:bg-accent/35"
                 >
                   <div className="font-medium">
                     {result.document_title} · 第 {result.page_no} 页

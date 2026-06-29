@@ -75,17 +75,17 @@ export function DocumentDetailPage() {
         </div>
       </section>
 
-      {recognition.error ? <p className="text-sm text-red-700">{recognition.error.message}</p> : null}
-      {exportMutation.error ? <p className="text-sm text-red-700">{exportMutation.error.message}</p> : null}
+      {recognition.error ? <p className="text-sm text-destructive">{recognition.error.message}</p> : null}
+      {exportMutation.error ? <p className="text-sm text-destructive">{exportMutation.error.message}</p> : null}
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {pages.data?.map((page) => (
           <Link
             key={page.page_id}
             to={`/review/${documentID}/${page.page_id}`}
-            className="panel block overflow-hidden transition hover:border-primary"
+            className="panel block overflow-hidden transition-colors hover:border-primary/50 hover:bg-accent/25"
           >
-            <div className="aspect-[4/3] bg-muted">
+            <div className="aspect-[4/3] bg-muted/60">
               <img src={page.thumbnail_url} alt={`第 ${page.page_no} 页`} className="h-full w-full object-contain" />
             </div>
             <div className="space-y-2 p-3">
@@ -105,10 +105,10 @@ export function DocumentDetailPage() {
       </section>
 
       <section className="panel overflow-hidden">
-        <div className="border-b border-border px-3 py-2 text-sm font-medium">识别运行</div>
+        <div className="border-b bg-muted/50 px-3 py-2 text-sm font-medium">识别运行</div>
         {runs.data?.length ? (
           runs.data.map((run) => (
-            <div key={run.id} className="grid gap-2 border-b border-border px-3 py-3 text-sm last:border-b-0 md:grid-cols-[1fr_120px_160px]">
+            <div key={run.id} className="grid gap-2 border-b px-3 py-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 md:grid-cols-[1fr_120px_160px]">
               <div className="min-w-0 truncate">
                 {run.provider} · {run.model || "未配置模型"}
               </div>
