@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 42 24% 97%;
+  --foreground: 222 20% 13%;
+  --muted: 210 18% 94%;
+  --muted-foreground: 218 10% 42%;
+  --border: 214 15% 84%;
+  --primary: 170 70% 27%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 38 92% 54%;
+  --accent-foreground: 32 38% 12%;
+  --danger: 0 72% 48%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.panel {
+  border: 1px solid hsl(var(--border));
+  background: rgba(255, 255, 255, 0.82);
+  border-radius: 8px;
+}
+
+.table-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) 120px 90px 160px 180px;
+}
+
+@media (max-width: 840px) {
+  .table-grid {
+    grid-template-columns: minmax(180px, 1fr) 96px 72px;
+  }
+
+  .table-grid > :nth-child(4),
+  .table-grid > :nth-child(5) {
+    display: none;
+  }
+}

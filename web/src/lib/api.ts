@@ -1,0 +1,254 @@
+export type Document = {
+  id: string;
+  title: string;
+  description: string;
+  author: string;
+  source: string;
+  status: string;
+  page_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PageDetail = {
+  page_id: string;
+  document_id: string;
+  page_no: number;
+  page_status: string;
+  width: number;
+  height: number;
+  image_asset_id: string;
+  thumb_asset_id: string;
+  recognition_count: number;
+  best_confidence: number | null;
+  last_provider: string;
+  last_model: string;
+  last_recognized_at: string;
+  has_candidate: boolean;
+  has_manual: boolean;
+  has_final: boolean;
+  updated_at: string;
+  image_url: string;
+  thumbnail_url: string;
+};
+
+export type RecognitionRun = {
+  id: string;
+  document_id: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  config_json: string;
+  status: string;
+  started_at: string;
+  finished_at: string;
+  created_at: string;
+};
+
+export type RecognitionResult = {
+  id: string;
+  run_id: string;
+  page_id: string;
+  text: string;
+  confidence: number | null;
+  raw_json: string;
+  created_at: string;
+  provider?: string;
+  model?: string;
+};
+
+export type TextVersion = {
+  id: string;
+  document_id: string;
+  page_id: string;
+  kind: string;
+  base_version_id: string;
+  source_result_id: string;
+  text: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+};
+
+export type Job = {
+  id: string;
+  type: string;
+  status: string;
+  target_type: string;
+  target_id: string;
+  payload_json: string;
+  attempts: number;
+  max_attempts: number;
+  last_error: string;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+};
+
+export type Annotation = {
+  id: string;
+  document_id: string;
+  page_id: string;
+  text_version_id: string;
+  kind: string;
+  status: string;
+  body: string;
+  anchor_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SearchResult = {
+  document_id: string;
+  document_title: string;
+  page_id: string;
+  page_no: number;
+  text_version_id: string;
+  snippet: string;
+};
+
+export type ExportFile = {
+  id: string;
+  document_id: string;
+  format: string;
+  download_url: string;
+  storage_path: string;
+};
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const body = (await response.json()) as { error?: string };
+      message = body.error ?? message;
+    } catch {
+      // keep status text
+    }
+    throw new Error(message);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+}
+
+export function listDocuments(params: { q?: string; status?: string }) {
+  const search = new URLSearchParams();
+  if (params.q) search.set("q", params.q);
+  if (params.status) search.set("status", params.status);
+  return apiFetch<Document[]>(`/api/documents?${search.toString()}`);
+}
+
+export function getDocument(id: string) {
+  return apiFetch<Document>(`/api/documents/${id}`);
+}
+
+export function importDocument(input: {
+  file: File;
+  title?: string;
+  author?: string;
+  source?: string;
+  description?: string;
+}) {
+  const form = new FormData();
+  form.set("file", input.file);
+  if (input.title) form.set("title", input.title);
+  if (input.author) form.set("author", input.author);
+  if (input.source) form.set("source", input.source);
+  if (input.description) form.set("description", input.description);
+  return apiFetch<Document>("/api/documents/import", { method: "POST", body: form });
+}
+
+export function listPages(documentID: string) {
+  return apiFetch<PageDetail[]>(`/api/documents/${documentID}/pages`);
+}
+
+export function getPage(pageID: string) {
+  return apiFetch<PageDetail>(`/api/pages/${pageID}`);
+}
+
+export function startRecognition(documentID: string) {
+  return apiFetch<{ run: RecognitionRun; job: Job }>(`/api/documents/${documentID}/recognition-runs`, {
+    method: "POST",
+  });
+}
+
+export function listRecognitionRuns(documentID: string) {
+  return apiFetch<RecognitionRun[]>(`/api/documents/${documentID}/recognition-runs`);
+}
+
+export function listRecognitionResults(pageID: string) {
+  return apiFetch<RecognitionResult[]>(`/api/pages/${pageID}/recognition-results`);
+}
+
+export function listTextVersions(pageID: string) {
+  return apiFetch<TextVersion[]>(`/api/pages/${pageID}/text-versions`);
+}
+
+export function createTextVersion(
+  pageID: string,
+  input: { kind: string; text: string; status?: string; source_result_id?: string; base_version_id?: string },
+) {
+  return apiFetch<TextVersion>(`/api/pages/${pageID}/text-versions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function searchText(q: string) {
+  return apiFetch<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
+}
+
+export function exportDocument(documentID: string, input: { format: string; include_page_numbers: boolean }) {
+  return apiFetch<ExportFile>(`/api/documents/${documentID}/exports`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listAnnotations(documentID: string, pageID?: string) {
+  const search = new URLSearchParams();
+  if (pageID) search.set("page_id", pageID);
+  return apiFetch<Annotation[]>(`/api/documents/${documentID}/annotations?${search.toString()}`);
+}
+
+export function createAnnotation(
+  documentID: string,
+  input: {
+    page_id?: string;
+    text_version_id?: string;
+    kind: string;
+    status?: string;
+    body: string;
+    anchor_json?: string;
+  },
+) {
+  return apiFetch<Annotation>(`/api/documents/${documentID}/annotations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function patchAnnotation(annotationID: string, input: { status?: string; body?: string }) {
+  return apiFetch<Annotation>(`/api/annotations/${annotationID}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listJobs() {
+  return apiFetch<Job[]>("/api/jobs");
+}
+
+export function cancelJob(jobID: string) {
+  return apiFetch<void>(`/api/jobs/${jobID}/cancel`, { method: "POST" });
+}
+
+export function retryJob(jobID: string) {
+  return apiFetch<{ run: RecognitionRun; job: Job }>(`/api/jobs/${jobID}/retry`, { method: "POST" });
+}
