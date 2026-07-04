@@ -8,6 +8,13 @@ export type Document = {
   page_count: number;
   created_at: string;
   updated_at: string;
+  tags?: Tag[];
+};
+
+export type Tag = {
+  id: string;
+  name: string;
+  color: string;
 };
 
 export type PageDetail = {
@@ -115,12 +122,26 @@ export type ExportFile = {
   storage_path: string;
 };
 
+export type DocumentAsset = {
+  id: string;
+  kind: string;
+  role: string;
+  sha256: string;
+  original_name: string;
+  mime_type: string;
+  byte_size: number;
+  storage_path: string;
+  download_url: string;
+  created_at: string;
+};
+
 export type VersionInfo = {
   version: string;
   commit: string;
   build_time: string;
   update_channel?: string;
   update_repo?: string;
+  update_source?: string;
 };
 
 export type UpdateStatus = {
@@ -145,6 +166,25 @@ export type UpdateCheckResult = {
   error?: string;
 };
 
+const ADMIN_TOKEN_STORAGE_KEY = "firescribe.admin_token";
+
+export function getAdminToken(): string {
+  return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ?? "";
+}
+
+export function setAdminToken(token: string) {
+  if (token) {
+    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  } else {
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  }
+}
+
+function adminHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { "X-Admin-Token": token } : {};
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
@@ -163,15 +203,27 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function listDocuments(params: { q?: string; status?: string }) {
+export function listDocuments(params: { q?: string; status?: string; tag?: string }) {
   const search = new URLSearchParams();
   if (params.q) search.set("q", params.q);
   if (params.status) search.set("status", params.status);
+  if (params.tag) search.set("tag", params.tag);
   return apiFetch<Document[]>(`/api/documents?${search.toString()}`);
 }
 
 export function getDocument(id: string) {
   return apiFetch<Document>(`/api/documents/${id}`);
+}
+
+export function patchDocument(
+  id: string,
+  input: Partial<Pick<Document, "title" | "description" | "author" | "source" | "status">>,
+) {
+  return apiFetch<Document>(`/api/documents/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export function importDocument(input: {
@@ -192,6 +244,22 @@ export function importDocument(input: {
 
 export function listPages(documentID: string) {
   return apiFetch<PageDetail[]>(`/api/documents/${documentID}/pages`);
+}
+
+export function listDocumentAssets(documentID: string) {
+  return apiFetch<DocumentAsset[]>(`/api/documents/${documentID}/assets`);
+}
+
+export function listTags() {
+  return apiFetch<Tag[]>("/api/tags");
+}
+
+export function setDocumentTags(documentID: string, names: string[]) {
+  return apiFetch<Tag[]>(`/api/documents/${documentID}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names }),
+  });
 }
 
 export function getPage(pageID: string) {
@@ -292,13 +360,13 @@ export function getUpdateStatus() {
 }
 
 export function checkUpdate() {
-  return apiFetch<UpdateCheckResult>("/api/update/check", { method: "POST" });
+  return apiFetch<UpdateCheckResult>("/api/update/check", { method: "POST", headers: adminHeaders() });
 }
 
 export function applyUpdate() {
-  return apiFetch<{ status: string }>("/api/update/apply", { method: "POST" });
+  return apiFetch<{ status: string }>("/api/update/apply", { method: "POST", headers: adminHeaders() });
 }
 
 export function dismissUpdate() {
-  return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST" });
+  return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST", headers: adminHeaders() });
 }
