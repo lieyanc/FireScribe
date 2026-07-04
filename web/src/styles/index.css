@@ -4,20 +4,20 @@
 
 :root {
   color-scheme: light;
-  --background: 210 40% 98%;
-  --foreground: 222.2 47.4% 11.2%;
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
   --card: 0 0% 100%;
-  --card-foreground: 222.2 47.4% 11.2%;
+  --card-foreground: 222.2 84% 4.9%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222.2 47.4% 11.2%;
+  --popover-foreground: 222.2 84% 4.9%;
   --primary: 204.3 99.2% 46.9%;
   --primary-foreground: 0 0% 100%;
   --secondary: 210 40% 96.1%;
   --secondary-foreground: 222.2 47.4% 11.2%;
   --muted: 210 40% 96.1%;
   --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 204.3 99.2% 95%;
-  --accent-foreground: 204.3 99.2% 32%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
   --destructive: 0 84.2% 60.2%;
   --destructive-foreground: 210 40% 98%;
   --border: 214.3 31.8% 91.4%;
@@ -40,8 +40,8 @@
   --secondary-foreground: 210 40% 98%;
   --muted: 217.2 32.6% 17.5%;
   --muted-foreground: 215 20.2% 65.1%;
-  --accent: 204.3 99.2% 18%;
-  --accent-foreground: 204.3 100% 88%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
   --destructive: 0 72.2% 50.6%;
   --destructive-foreground: 210 40% 98%;
   --border: 217.2 32.6% 17.5%;
@@ -49,79 +49,33 @@
   --ring: 204.3 99.2% 46.9%;
 }
 
-* {
-  box-sizing: border-box;
-  border-color: hsl(var(--border));
-}
-
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-feature-settings:
-    "rlig" 1,
-    "calt" 1;
-}
-
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-
-input,
-textarea,
-select {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
-}
-
-input[type="file"]::file-selector-button {
-  border-radius: calc(var(--radius) - 4px);
-  color: hsl(var(--foreground));
-}
-
-.panel {
-  border: 1px solid hsl(var(--border));
-  background: hsl(var(--card));
-  color: hsl(var(--card-foreground));
-  border-radius: var(--radius);
-  box-shadow: 0 1px 2px hsl(222.2 47.4% 11.2% / 0.04);
-}
-
-.dark .panel {
-  box-shadow: 0 1px 2px hsl(0 0% 0% / 0.22);
-}
-
-.table-grid {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) 120px 90px 160px 180px;
-}
-
-.jobs-grid {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) 110px 110px 150px 118px;
-}
-
-@media (max-width: 840px) {
-  .table-grid {
-    grid-template-columns: minmax(180px, 1fr) 96px 72px;
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
   }
 
-  .table-grid > :nth-child(4),
-  .table-grid > :nth-child(5) {
-    display: none;
+  html {
+    min-width: 320px;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
   }
 
-  .jobs-grid {
-    grid-template-columns: minmax(120px, 1fr) 86px 56px 80px;
+  body {
+    @apply min-h-screen bg-background font-sans text-foreground antialiased;
+    margin: 0;
   }
 
-  .jobs-grid > :nth-child(4) {
-    display: none;
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  input[type="file"]::file-selector-button {
+    border-radius: calc(var(--radius) - 4px);
+    color: hsl(var(--foreground));
   }
 }

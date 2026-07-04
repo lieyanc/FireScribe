@@ -17,6 +17,20 @@ export function formatTime(value?: string) {
   }).format(date);
 }
 
+export function formatBytes(value?: number) {
+  if (value == null || Number.isNaN(value) || value < 0) return "--";
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value;
+  let unit = "B";
+  for (const next of units) {
+    if (size < 1024) break;
+    size /= 1024;
+    unit = next;
+  }
+  return `${size >= 100 ? Math.round(size) : size.toFixed(1)} ${unit}`;
+}
+
 export function statusLabel(value: string) {
   const labels: Record<string, string> = {
     new: "新建",
