@@ -10,6 +10,7 @@ type Document struct {
 	PageCount   int    `json:"page_count"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	Tags        []Tag  `json:"tags,omitempty"`
 }
 
 type Asset struct {
@@ -21,6 +22,25 @@ type Asset struct {
 	ByteSize     int64  `json:"byte_size"`
 	StoragePath  string `json:"storage_path"`
 	CreatedAt    string `json:"created_at"`
+}
+
+type DocumentAsset struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Role         string `json:"role"`
+	SHA256       string `json:"sha256"`
+	OriginalName string `json:"original_name"`
+	MimeType     string `json:"mime_type"`
+	ByteSize     int64  `json:"byte_size"`
+	StoragePath  string `json:"storage_path"`
+	DownloadURL  string `json:"download_url"`
+	CreatedAt    string `json:"created_at"`
+}
+
+type Tag struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 type Page struct {

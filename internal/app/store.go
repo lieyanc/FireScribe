@@ -18,6 +18,7 @@ type Store struct {
 type DocumentFilter struct {
 	Query  string
 	Status string
+	Tag    string
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -35,13 +36,20 @@ func (s *Store) CreateDocument(ctx context.Context, doc Document) error {
 func (s *Store) ListDocuments(ctx context.Context, filter DocumentFilter) ([]Document, error) {
 	query := strings.TrimSpace(filter.Query)
 	status := strings.TrimSpace(filter.Status)
+	tag := strings.TrimSpace(filter.Tag)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, title, description, author, source, status, page_count, created_at, updated_at
 		FROM documents
 		WHERE (? = '' OR status = ?)
 		  AND (? = '' OR title LIKE '%' || ? || '%' OR author LIKE '%' || ? || '%' OR source LIKE '%' || ? || '%')
+		  AND (? = '' OR EXISTS (
+		    SELECT 1
+		    FROM document_tags dt
+		    JOIN tags t ON t.id = dt.tag_id
+		    WHERE dt.document_id = documents.id AND t.name = ? COLLATE NOCASE
+		  ))
 		ORDER BY updated_at DESC
-	`, status, status, query, query, query, query)
+	`, status, status, query, query, query, query, tag, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +66,7 @@ func (s *Store) ListDocuments(ctx context.Context, filter DocumentFilter) ([]Doc
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return docs, nil
+	return s.attachDocumentTags(ctx, docs)
 }
 
 func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
@@ -67,6 +75,10 @@ func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
 		SELECT id, title, description, author, source, status, page_count, created_at, updated_at
 		FROM documents WHERE id = ?
 	`, id).Scan(&doc.ID, &doc.Title, &doc.Description, &doc.Author, &doc.Source, &doc.Status, &doc.PageCount, &doc.CreatedAt, &doc.UpdatedAt)
+	if err != nil {
+		return doc, err
+	}
+	doc.Tags, err = s.ListDocumentTags(ctx, id)
 	return doc, err
 }
 
@@ -99,6 +111,10 @@ func (s *Store) PatchDocument(ctx context.Context, id string, title, description
 		SET title = ?, description = ?, author = ?, source = ?, status = ?, updated_at = ?
 		WHERE id = ?
 	`, doc.Title, doc.Description, doc.Author, doc.Source, doc.Status, doc.UpdatedAt, id)
+	if err != nil {
+		return Document{}, err
+	}
+	doc.Tags, err = s.ListDocumentTags(ctx, id)
 	if err != nil {
 		return Document{}, err
 	}
@@ -153,6 +169,133 @@ func (s *Store) LinkDocumentAsset(ctx context.Context, documentID, assetID, role
 		VALUES (?, ?, ?, ?)
 	`, documentID, assetID, role, now())
 	return err
+}
+
+func (s *Store) ListDocumentAssets(ctx context.Context, documentID string) ([]DocumentAsset, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.kind, da.role, a.sha256, a.original_name, a.mime_type, a.byte_size, a.storage_path, a.created_at
+		FROM document_assets da
+		JOIN assets a ON a.id = da.asset_id
+		WHERE da.document_id = ?
+		ORDER BY CASE da.role
+			WHEN 'original' THEN 0
+			WHEN 'page_image' THEN 1
+			WHEN 'thumbnail' THEN 2
+			WHEN 'export' THEN 3
+			ELSE 4
+		END, a.created_at DESC
+	`, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	assets := []DocumentAsset{}
+	for rows.Next() {
+		var asset DocumentAsset
+		if err := rows.Scan(
+			&asset.ID, &asset.Kind, &asset.Role, &asset.SHA256, &asset.OriginalName,
+			&asset.MimeType, &asset.ByteSize, &asset.StoragePath, &asset.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		assets = append(assets, asset)
+	}
+	return assets, rows.Err()
+}
+
+func (s *Store) ListTags(ctx context.Context) ([]Tag, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, color FROM tags ORDER BY lower(name), name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := []Tag{}
+	for rows.Next() {
+		var tag Tag
+		if err := rows.Scan(&tag.ID, &tag.Name, &tag.Color); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
+	}
+	return tags, rows.Err()
+}
+
+func (s *Store) ListDocumentTags(ctx context.Context, documentID string) ([]Tag, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.name, t.color
+		FROM document_tags dt
+		JOIN tags t ON t.id = dt.tag_id
+		WHERE dt.document_id = ?
+		ORDER BY lower(t.name), t.name
+	`, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := []Tag{}
+	for rows.Next() {
+		var tag Tag
+		if err := rows.Scan(&tag.ID, &tag.Name, &tag.Color); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
+	}
+	return tags, rows.Err()
+}
+
+func (s *Store) SetDocumentTags(ctx context.Context, documentID string, names []string) ([]Tag, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	tagIDs := make([]string, 0, len(names))
+	for _, rawName := range names {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		var tagID string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE name = ? COLLATE NOCASE`, name).Scan(&tagID)
+		if errors.Is(err, sql.ErrNoRows) {
+			tagID = newID("tag")
+			_, err = tx.ExecContext(ctx, `INSERT INTO tags(id, name, color) VALUES (?, ?, '')`, tagID, name)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		tagIDs = append(tagIDs, tagID)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM document_tags WHERE document_id = ?`, documentID); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	for _, tagID := range tagIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)
+		`, documentID, tagID); err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE documents SET updated_at = ? WHERE id = ?`, now(), documentID); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.ListDocumentTags(ctx, documentID)
 }
 
 func (s *Store) CreatePage(ctx context.Context, page Page) error {
@@ -716,4 +859,15 @@ func decodeJobPayload(payload string) map[string]string {
 	values := map[string]string{}
 	_ = json.Unmarshal([]byte(payload), &values)
 	return values
+}
+
+func (s *Store) attachDocumentTags(ctx context.Context, docs []Document) ([]Document, error) {
+	for i := range docs {
+		tags, err := s.ListDocumentTags(ctx, docs[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		docs[i].Tags = tags
+	}
+	return docs, nil
 }

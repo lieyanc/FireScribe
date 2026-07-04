@@ -70,6 +70,8 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/documents/{documentID}", s.getDocument)
 		r.Patch("/documents/{documentID}", s.patchDocument)
 		r.Delete("/documents/{documentID}", s.deleteDocument)
+		r.Get("/documents/{documentID}/assets", s.listDocumentAssets)
+		r.Put("/documents/{documentID}/tags", s.setDocumentTags)
 		r.Get("/documents/{documentID}/pages", s.listPages)
 		r.Post("/documents/{documentID}/recognition-runs", s.startRecognition)
 		r.Get("/documents/{documentID}/recognition-runs", s.listRecognitionRuns)
@@ -87,6 +89,8 @@ func (s *Server) Routes() http.Handler {
 
 		r.Get("/recognition-runs/{runID}", s.getRecognitionRun)
 		r.Get("/search", s.search)
+		r.Get("/tags", s.listTags)
+		r.Get("/assets/{assetID}/download", s.downloadAsset)
 		r.Get("/exports/{exportID}", s.getExport)
 		r.Get("/exports/{exportID}/download", s.downloadExport)
 		r.Get("/jobs", s.listJobs)
@@ -227,6 +231,7 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 	docs, err := s.app.Store.ListDocuments(r.Context(), app.DocumentFilter{
 		Query:  r.URL.Query().Get("q"),
 		Status: r.URL.Query().Get("status"),
+		Tag:    r.URL.Query().Get("tag"),
 	})
 	if err != nil {
 		writeError(w, err)
@@ -287,6 +292,34 @@ func (s *Server) patchDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+func (s *Server) listDocumentAssets(w http.ResponseWriter, r *http.Request) {
+	assets, err := s.app.Store.ListDocumentAssets(r.Context(), chi.URLParam(r, "documentID"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for i := range assets {
+		assets[i].DownloadURL = "/api/assets/" + assets[i].ID + "/download"
+	}
+	writeJSON(w, http.StatusOK, assets)
+}
+
+func (s *Server) setDocumentTags(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	tags, err := s.app.Store.SetDocumentTags(r.Context(), chi.URLParam(r, "documentID"), req.Names)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tags)
 }
 
 func (s *Server) deleteDocument(w http.ResponseWriter, r *http.Request) {
@@ -461,6 +494,15 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
+func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
+	tags, err := s.app.Store.ListTags(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tags)
+}
+
 func (s *Server) exportDocument(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Format             string `json:"format"`
@@ -545,6 +587,10 @@ func (s *Server) downloadExport(w http.ResponseWriter, r *http.Request) {
 	s.serveAsset(w, r, chi.URLParam(r, "exportID"), true)
 }
 
+func (s *Server) downloadAsset(w http.ResponseWriter, r *http.Request) {
+	s.serveAsset(w, r, chi.URLParam(r, "assetID"), true)
+}
+
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.app.Store.ListJobs(r.Context())
 	if err != nil {
@@ -591,7 +637,11 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, assetID stri
 		return
 	}
 	if attachment {
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(asset.StoragePath)))
+		filename := filepath.Base(asset.StoragePath)
+		if strings.TrimSpace(asset.OriginalName) != "" {
+			filename = filepath.Base(asset.OriginalName)
+		}
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 	}
 	if asset.MimeType != "" {
 		w.Header().Set("Content-Type", asset.MimeType)

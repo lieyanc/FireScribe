@@ -39,6 +39,38 @@ func TestMVPWorkflowImportRecognizeReviewSearchExport(t *testing.T) {
 	if doc.PageCount != 1 || doc.Status != "ready" {
 		t.Fatalf("unexpected imported doc: %+v", doc)
 	}
+	if _, err := application.Store.SetDocumentTags(ctx, doc.ID, []string{"手稿", "家庭档案", "Draft"}); err != nil {
+		t.Fatal(err)
+	}
+	if tags, err := application.Store.SetDocumentTags(ctx, doc.ID, []string{"手稿", "家庭档案", "draft"}); err != nil {
+		t.Fatal(err)
+	} else if len(tags) != 3 {
+		t.Fatalf("expected case-insensitive tag reuse, got %+v", tags)
+	}
+	allTags, err := application.Store.ListTags(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allTags) != 3 {
+		t.Fatalf("expected 3 distinct tags, got %+v", allTags)
+	}
+	if _, err := application.Store.SetDocumentTags(ctx, doc.ID, []string{"手稿", "家庭档案"}); err != nil {
+		t.Fatal(err)
+	}
+	taggedDocs, err := application.Store.ListDocuments(ctx, app.DocumentFilter{Tag: "手稿"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taggedDocs) != 1 || taggedDocs[0].ID != doc.ID || len(taggedDocs[0].Tags) != 2 {
+		t.Fatalf("unexpected tagged docs: %+v", taggedDocs)
+	}
+	assets, err := application.Store.ListDocumentAssets(ctx, doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) < 2 {
+		t.Fatalf("expected original/page assets, got %+v", assets)
+	}
 
 	start, err := application.StartRecognition(ctx, doc.ID)
 	if err != nil {
