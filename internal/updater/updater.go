@@ -2,7 +2,9 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,8 +26,10 @@ type Config struct {
 	Enabled       bool   `json:"enabled"`
 	Channel       string `json:"channel"`
 	CheckInterval int    `json:"check_interval"`
+	Source        string `json:"source"`
 	ProxyBaseURL  string `json:"proxy_base_url"`
 	Repo          string `json:"repo"`
+	AdminToken    string `json:"admin_token"`
 }
 
 type Status struct {
@@ -52,6 +56,10 @@ type CheckResult struct {
 type RestartHooks struct {
 	BeforeExec    func(tag string) error
 	OnExecFailure func(error)
+	// IsBusy reports whether the application is processing work that should
+	// not be interrupted by a restart. When set, the updater waits for it to
+	// return false (bounded by idleWaitTimeout) before applying an update.
+	IsBusy func() bool
 }
 
 type Updater struct {
@@ -70,6 +78,18 @@ type Updater struct {
 }
 
 const (
+	idleWaitTimeout  = 10 * time.Minute
+	idlePollInterval = 5 * time.Second
+	downloadTimeout  = 30 * time.Minute
+
+	// SourceGitHub downloads release assets straight from
+	// github.com/<repo>/releases/download/... links, which are CDN
+	// redirects and not subject to GitHub REST API rate limits.
+	SourceGitHub = "github"
+	// SourceProxy routes release lookups and downloads through the
+	// configured proxy_base_url mirror.
+	SourceProxy = "proxy"
+
 	progressChecking      = 5
 	progressReleaseFound  = 10
 	progressDownloadStart = 10
@@ -162,6 +182,7 @@ func (u *Updater) ApplyPending(_ context.Context) error {
 
 	go func() {
 		time.Sleep(200 * time.Millisecond)
+		u.waitForIdle(u.bgContext())
 		if err := u.applyUpdate(path, tag); err != nil {
 			u.notifyExecFailure(err)
 			u.setError("apply failed: " + err.Error())
@@ -286,6 +307,7 @@ func (u *Updater) performUpdate(ctx context.Context) {
 		u.status.Progress = progressApplying
 		u.status.DownloadProgress = 0
 		u.mu.Unlock()
+		u.waitForIdle(ctx)
 		if err := u.applyUpdate(binaryPath, release.TagName); err != nil {
 			u.notifyExecFailure(err)
 			u.setError("apply failed: " + err.Error())
@@ -335,6 +357,31 @@ func (u *Updater) notifyExecFailure(err error) {
 	u.hooks.OnExecFailure(err)
 }
 
+// waitForIdle blocks until the application reports no in-flight work, the
+// context is canceled, or idleWaitTimeout elapses (then proceeds anyway).
+func (u *Updater) waitForIdle(ctx context.Context) {
+	if u.hooks.IsBusy == nil || !u.hooks.IsBusy() {
+		return
+	}
+	u.logger.Printf("update: waiting for in-flight jobs to finish before applying (max %s)", idleWaitTimeout)
+	deadline := time.After(idleWaitTimeout)
+	ticker := time.NewTicker(idlePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			u.logger.Printf("update: idle wait timed out, applying anyway")
+			return
+		case <-ticker.C:
+			if !u.hooks.IsBusy() {
+				return
+			}
+		}
+	}
+}
+
 type releaseInfo struct {
 	TagName         string      `json:"tag_name"`
 	TargetCommitish string      `json:"target_commitish"`
@@ -366,7 +413,108 @@ func (r releaseInfo) displayVersion() string {
 	return r.TagName
 }
 
+var (
+	// githubBaseURL is a var so tests can point direct-source checks at a
+	// local server.
+	githubBaseURL = "https://github.com"
+	// signingPublicKeyHex is the Ed25519 public key matching the
+	// UPDATE_SIGNING_KEY repository secret used by CI to sign release
+	// assets (see scripts/sign).
+	signingPublicKeyHex = "16396218e67531f53a5d3f9468613ebdf2b28664f2c6a3d65bdfdf9444df5c96"
+)
+
 func (u *Updater) checkForUpdate(ctx context.Context, cfg Config) (*releaseInfo, bool, error) {
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var (
+		release *releaseInfo
+		err     error
+	)
+	if cfg.Source == SourceProxy {
+		release, err = u.fetchReleaseViaProxy(checkCtx, cfg)
+	} else {
+		release, err = u.fetchReleaseFromGitHub(checkCtx, cfg)
+	}
+	if err != nil || release == nil {
+		return nil, false, err
+	}
+	if !u.isNewer(*release, cfg.Channel) {
+		u.logger.Printf("update: already up to date (%s)", release.displayVersion())
+		return release, false, nil
+	}
+	return release, true, nil
+}
+
+// fetchReleaseFromGitHub resolves the latest release without touching the
+// GitHub REST API: it fetches the signed version.json straight from the
+// release download URL (fixed "dev" tag, or the "latest" redirect for
+// stable) and synthesizes the asset list from the tag it names.
+func (u *Updater) fetchReleaseFromGitHub(ctx context.Context, cfg Config) (*releaseInfo, error) {
+	base := githubBaseURL + "/" + cfg.Repo + "/releases"
+	versionURL := base + "/latest/download/version.json"
+	if cfg.Channel != "stable" {
+		versionURL = base + "/download/dev/version.json"
+	}
+	u.logger.Printf("update: checking %s", versionURL)
+
+	body, status, err := u.httpGet(ctx, versionURL, 16*1024)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		u.logger.Printf("update: no release found for channel %s", cfg.Channel)
+		return nil, nil
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d", status)
+	}
+
+	var info releaseVersionInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, fmt.Errorf("decode version metadata: %w", err)
+	}
+	tag := strings.TrimSpace(info.Tag)
+	if cfg.Channel != "stable" {
+		tag = "dev"
+	} else if tag == "" {
+		return nil, fmt.Errorf("version metadata missing release tag")
+	}
+
+	// The signature lives next to the assets of the tag the metadata
+	// names, so a tampered body cannot redirect verification elsewhere:
+	// only the holder of the signing key can produce a matching pair.
+	sig, sigStatus, err := u.httpGet(ctx, base+"/download/"+tag+"/version.json.sig", 4*1024)
+	if err != nil {
+		return nil, fmt.Errorf("fetch version metadata signature: %w", err)
+	}
+	if sigStatus != http.StatusOK {
+		return nil, fmt.Errorf("version metadata signature returned status %d", sigStatus)
+	}
+	if err := verifySignature(body, sig); err != nil {
+		return nil, fmt.Errorf("version metadata: %w", err)
+	}
+
+	targetName := u.targetName()
+	assetNames := []string{targetName, targetName + ".sha256", targetName + ".sha256.sig", "version.json"}
+	assets := make([]assetInfo, 0, len(assetNames))
+	for _, name := range assetNames {
+		assets = append(assets, assetInfo{
+			Name:               name,
+			BrowserDownloadURL: base + "/download/" + tag + "/" + name,
+		})
+	}
+	return &releaseInfo{
+		TagName:    tag,
+		Prerelease: cfg.Channel != "stable",
+		Assets:     assets,
+		Version:    strings.TrimSpace(info.Version),
+		Commit:     strings.TrimSpace(info.Commit),
+		BuildTime:  strings.TrimSpace(info.BuildTime),
+	}, nil
+}
+
+func (u *Updater) fetchReleaseViaProxy(ctx context.Context, cfg Config) (*releaseInfo, error) {
 	tag := "latest"
 	if cfg.Channel != "stable" {
 		tag = "dev"
@@ -375,41 +523,34 @@ func (u *Updater) checkForUpdate(ctx context.Context, cfg Config) (*releaseInfo,
 	url := fmt.Sprintf("%s/api/releases/%s/%s", strings.TrimRight(cfg.ProxyBaseURL, "/"), cfg.Repo, tag)
 	u.logger.Printf("update: checking %s", url)
 
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
 		u.logger.Printf("update: no release found for channel %s", cfg.Channel)
-		return nil, false, nil
+		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	var release releaseInfo
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, false, fmt.Errorf("decode release: %w", err)
+		return nil, fmt.Errorf("decode release: %w", err)
 	}
 	if cfg.Channel != "stable" {
-		if err := u.loadReleaseVersion(checkCtx, cfg, &release); err != nil {
+		if err := u.loadReleaseVersion(ctx, cfg, &release); err != nil {
 			u.logger.Printf("update: version metadata unavailable for %s: %v", release.TagName, err)
 		}
 	}
-	if !u.isNewer(release, cfg.Channel) {
-		u.logger.Printf("update: already up to date (%s)", release.displayVersion())
-		return &release, false, nil
-	}
-	return &release, true, nil
+	return &release, nil
 }
 
 func (u *Updater) loadReleaseVersion(ctx context.Context, cfg Config, release *releaseInfo) error {
@@ -424,7 +565,7 @@ func (u *Updater) loadReleaseVersion(ctx context.Context, cfg Config, release *r
 		return fmt.Errorf("version.json asset not found")
 	}
 
-	versionURL := u.proxyDownloadURL(cfg, versionAsset.BrowserDownloadURL)
+	versionURL := u.resolveDownloadURL(cfg, versionAsset.BrowserDownloadURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
 		return err
@@ -539,9 +680,6 @@ func (u *Updater) targetName() string {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 	target := goos + "-" + goarch
-	if goos == "linux" && goarch == "arm" {
-		target = "linux-armv7"
-	}
 
 	ext := ""
 	if goos == "windows" {
@@ -558,18 +696,26 @@ func (u *Updater) download(ctx context.Context, cfg Config, release *releaseInfo
 	u.mu.Unlock()
 
 	targetName := u.targetName()
-	var binaryAsset, sha256Asset *assetInfo
+	var binaryAsset, sha256Asset, sigAsset *assetInfo
 	for i := range release.Assets {
 		a := &release.Assets[i]
-		if a.Name == targetName {
+		switch a.Name {
+		case targetName:
 			binaryAsset = a
-		}
-		if a.Name == targetName+".sha256" {
+		case targetName + ".sha256":
 			sha256Asset = a
+		case targetName + ".sha256.sig":
+			sigAsset = a
 		}
 	}
 	if binaryAsset == nil {
 		return "", fmt.Errorf("no asset found for %s in release %s", targetName, release.TagName)
+	}
+	if sha256Asset == nil {
+		return "", fmt.Errorf("release %s is missing %s.sha256, refusing unverified update", release.TagName, targetName)
+	}
+	if sigAsset == nil {
+		return "", fmt.Errorf("release %s is missing %s.sha256.sig, refusing unsigned update", release.TagName, targetName)
 	}
 
 	updateDir := filepath.Join(u.dataDir(), "updates")
@@ -584,34 +730,50 @@ func (u *Updater) download(ctx context.Context, cfg Config, release *releaseInfo
 	tmpPath := filepath.Join(updateDir, finalName+".tmp")
 	finalPath := filepath.Join(updateDir, finalName)
 
-	downloadURL := u.proxyDownloadURL(cfg, binaryAsset.BrowserDownloadURL)
-	if err := u.downloadFile(ctx, downloadURL, tmpPath, binaryAsset.Size); err != nil {
+	dlCtx, cancelDownload := context.WithTimeout(ctx, downloadTimeout)
+	defer cancelDownload()
+
+	downloadURL := u.resolveDownloadURL(cfg, binaryAsset.BrowserDownloadURL)
+	if err := u.downloadFile(dlCtx, downloadURL, tmpPath, binaryAsset.Size); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("download binary: %w", err)
 	}
 
-	if sha256Asset != nil {
-		u.mu.Lock()
-		u.status.Progress = progressVerifyStart
-		u.mu.Unlock()
+	u.mu.Lock()
+	u.status.Progress = progressVerifyStart
+	u.mu.Unlock()
 
-		sha256URL := u.proxyDownloadURL(cfg, sha256Asset.BrowserDownloadURL)
-		expectedHash, err := u.fetchSHA256(ctx, sha256URL)
-		if err != nil {
-			_ = os.Remove(tmpPath)
-			return "", fmt.Errorf("fetch sha256: %w", err)
-		}
-		actualHash, err := fileSHA256(tmpPath)
-		if err != nil {
-			_ = os.Remove(tmpPath)
-			return "", fmt.Errorf("compute sha256: %w", err)
-		}
-		if !strings.EqualFold(actualHash, expectedHash) {
-			_ = os.Remove(tmpPath)
-			return "", fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedHash, actualHash)
-		}
-		u.logger.Printf("update: SHA256 verified for %s", release.TagName)
+	shaBody, err := u.fetchAsset(dlCtx, cfg, sha256Asset, 1024)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("fetch sha256: %w", err)
 	}
+	sigBody, err := u.fetchAsset(dlCtx, cfg, sigAsset, 4*1024)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("fetch sha256 signature: %w", err)
+	}
+	if err := verifySignature(shaBody, sigBody); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("sha256 file: %w", err)
+	}
+
+	parts := strings.Fields(strings.TrimSpace(string(shaBody)))
+	if len(parts) == 0 {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("empty sha256 file")
+	}
+	expectedHash := parts[0]
+	actualHash, err := fileSHA256(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("compute sha256: %w", err)
+	}
+	if !strings.EqualFold(actualHash, expectedHash) {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+	u.logger.Printf("update: signature and SHA256 verified for %s", release.TagName)
 
 	u.mu.Lock()
 	u.status.Progress = progressVerifyDone
@@ -626,7 +788,13 @@ func (u *Updater) download(ctx context.Context, cfg Config, release *releaseInfo
 	return finalPath, nil
 }
 
-func (u *Updater) proxyDownloadURL(cfg Config, browserURL string) string {
+// resolveDownloadURL maps a GitHub browser_download_url onto the proxy
+// mirror when the proxy source is selected; in direct mode the URL is used
+// as-is.
+func (u *Updater) resolveDownloadURL(cfg Config, browserURL string) string {
+	if cfg.Source != SourceProxy {
+		return browserURL
+	}
 	base := strings.TrimRight(cfg.ProxyBaseURL, "/")
 	const ghPrefix = "https://github.com/"
 	if !strings.HasPrefix(browserURL, ghPrefix) {
@@ -704,29 +872,51 @@ func (u *Updater) downloadFile(ctx context.Context, url, destPath string, expect
 	return nil
 }
 
-func (u *Updater) fetchSHA256(ctx context.Context, url string) (string, error) {
+// httpGet fetches url and returns up to limit bytes of the body along with
+// the status code. Network errors are returned; HTTP error statuses are not.
+func (u *Updater) httpGet(ctx context.Context, url string, limit int64) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, 0, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("sha256 download returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
-		return "", err
+		return nil, resp.StatusCode, err
 	}
-	parts := strings.Fields(strings.TrimSpace(string(body)))
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty sha256 file")
+	return body, resp.StatusCode, nil
+}
+
+func (u *Updater) fetchAsset(ctx context.Context, cfg Config, asset *assetInfo, limit int64) ([]byte, error) {
+	body, status, err := u.httpGet(ctx, u.resolveDownloadURL(cfg, asset.BrowserDownloadURL), limit)
+	if err != nil {
+		return nil, err
 	}
-	return parts[0], nil
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%s returned status %d", asset.Name, status)
+	}
+	return body, nil
+}
+
+// verifySignature checks the base64 Ed25519 signature produced by
+// scripts/sign against the embedded release signing public key.
+func verifySignature(message, sig []byte) error {
+	pub, err := hex.DecodeString(signingPublicKeyHex)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid embedded signing public key")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), message, raw) {
+		return fmt.Errorf("signature verification failed")
+	}
+	return nil
 }
 
 func fileSHA256(path string) (string, error) {
@@ -889,11 +1079,16 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.CheckInterval <= 0 {
 		cfg.CheckInterval = 3600
 	}
+	cfg.Source = strings.ToLower(strings.TrimSpace(cfg.Source))
+	if cfg.Source != SourceProxy {
+		cfg.Source = SourceGitHub
+	}
 	if strings.TrimSpace(cfg.ProxyBaseURL) == "" {
 		cfg.ProxyBaseURL = "https://dl.repo.chycloud.top"
 	}
 	cfg.ProxyBaseURL = strings.TrimRight(strings.TrimSpace(cfg.ProxyBaseURL), "/")
 	cfg.Repo = strings.TrimSpace(cfg.Repo)
+	cfg.AdminToken = strings.TrimSpace(cfg.AdminToken)
 	return cfg
 }
 

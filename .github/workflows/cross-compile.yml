@@ -81,42 +81,30 @@ jobs:
           - target: windows-amd64
             goos: windows
             goarch: amd64
-            goarm: ""
             ext: ".exe"
           - target: windows-arm64
             goos: windows
             goarch: arm64
-            goarm: ""
             ext: ".exe"
           - target: linux-amd64
             goos: linux
             goarch: amd64
-            goarm: ""
             ext: ""
           - target: linux-arm64
             goos: linux
             goarch: arm64
-            goarm: ""
-            ext: ""
-          - target: linux-armv7
-            goos: linux
-            goarch: arm
-            goarm: "7"
             ext: ""
           - target: linux-riscv64
             goos: linux
             goarch: riscv64
-            goarm: ""
             ext: ""
           - target: darwin-amd64
             goos: darwin
             goarch: amd64
-            goarm: ""
             ext: ""
           - target: darwin-arm64
             goos: darwin
             goarch: arm64
-            goarm: ""
             ext: ""
     steps:
       - name: Checkout
@@ -145,7 +133,6 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -185,6 +172,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Build release metadata
         id: meta
         run: |
@@ -211,6 +203,17 @@ jobs:
           }
           EOF
 
+      - name: Sign release assets
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPDATE_SIGNING_KEY}" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not set" >&2
+            exit 1
+          fi
+          go run ./scripts/sign release/*.sha256 release/version.json
+
       - name: Refresh dev tag and prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -230,15 +233,48 @@ jobs:
   release-prod:
     name: Publish Prod Release
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - meta
+      - build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: firescribe-*
           path: release
           merge-multiple: true
+
+      - name: Add version metadata
+        run: |
+          set -euo pipefail
+          cat > release/version.json <<'EOF'
+          {
+            "version": "${{ needs.meta.outputs.version }}",
+            "commit": "${{ needs.meta.outputs.commit }}",
+            "build_time": "${{ needs.meta.outputs.build_time }}",
+            "tag": "${{ github.ref_name }}"
+          }
+          EOF
+
+      - name: Sign release assets
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPDATE_SIGNING_KEY}" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not set" >&2
+            exit 1
+          fi
+          go run ./scripts/sign release/*.sha256 release/version.json
 
       - name: Create release
         uses: softprops/action-gh-release@v2

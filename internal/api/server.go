@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"io/fs"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	urlpath "path"
@@ -50,6 +53,7 @@ func New(application *app.App, webDir string, updateRuntime ...UpdateRuntime) *S
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(capturePeerAddr)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -58,9 +62,9 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/health", s.health)
 		r.Get("/version", s.version)
 		r.Get("/update/status", s.updateStatus)
-		r.Post("/update/check", s.updateCheck)
-		r.Post("/update/apply", s.updateApply)
-		r.Post("/update/dismiss", s.updateDismiss)
+		r.Post("/update/check", s.requireUpdateToken(s.updateCheck))
+		r.Post("/update/apply", s.requireUpdateToken(s.updateApply))
+		r.Post("/update/dismiss", s.requireUpdateToken(s.updateDismiss))
 		r.Get("/documents", s.listDocuments)
 		r.Post("/documents/import", s.importDocument)
 		r.Get("/documents/{documentID}", s.getDocument)
@@ -105,7 +109,61 @@ func (s *Server) version(w http.ResponseWriter, r *http.Request) {
 	info := version.Info()
 	info["update_channel"] = normalizedUpdateChannel(s.updateCfg.Channel)
 	info["update_repo"] = strings.TrimSpace(s.updateCfg.Repo)
+	info["update_source"] = strings.TrimSpace(s.updateCfg.Source)
 	writeJSON(w, http.StatusOK, info)
+}
+
+type peerAddrKeyType struct{}
+
+var peerAddrKey peerAddrKeyType
+
+// capturePeerAddr stores the TCP peer address before RealIP rewrites
+// r.RemoteAddr from spoofable forwarding headers.
+func capturePeerAddr(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), peerAddrKey, r.RemoteAddr)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	addr, _ := r.Context().Value(peerAddrKey).(string)
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// requireUpdateToken guards mutating update endpoints. With update.admin_token
+// configured, requests must present it (X-Admin-Token or Bearer). Without a
+// token, only loopback connections may trigger updates.
+func (s *Server) requireUpdateToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimSpace(s.updateCfg.AdminToken)
+		if token == "" {
+			if !isLoopbackRequest(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "update actions are limited to localhost; set update.admin_token in config.json to allow remote access",
+				})
+				return
+			}
+			next(w, r)
+			return
+		}
+		provided := strings.TrimSpace(r.Header.Get("X-Admin-Token"))
+		if provided == "" {
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				provided = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+			}
+		}
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or missing admin token"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {

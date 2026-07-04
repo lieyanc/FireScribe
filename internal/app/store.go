@@ -55,7 +55,10 @@ func (s *Store) ListDocuments(ctx context.Context, filter DocumentFilter) ([]Doc
 		}
 		docs = append(docs, doc)
 	}
-	return docs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return docs, nil
 }
 
 func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
@@ -483,6 +486,32 @@ func (s *Store) MarkJobFailed(ctx context.Context, id string, cause error) error
 func (s *Store) MarkJobCanceled(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = 'canceled', finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`, now(), id)
 	return err
+}
+
+// FailInterruptedJobs marks jobs left in queued/running state by a previous
+// process (crash or update restart) as failed so they become retryable, and
+// fails the recognition runs they were driving.
+func (s *Store) FailInterruptedJobs(ctx context.Context) (int64, error) {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE recognition_runs SET status = 'failed', finished_at = ?
+		WHERE status IN ('queued', 'running')
+	`, now()); err != nil {
+		return 0, err
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE jobs SET status = 'failed', finished_at = ?, last_error = 'interrupted by server restart'
+		WHERE status IN ('queued', 'running')
+	`, now())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) HasActiveJobs(ctx context.Context) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')`).Scan(&count)
+	return count > 0, err
 }
 
 func (s *Store) CreateAnnotation(ctx context.Context, annotation Annotation) error {

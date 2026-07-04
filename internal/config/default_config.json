@@ -10,8 +10,10 @@
     "enabled": false,
     "channel": "stable",
     "check_interval": 3600,
+    "source": "github",
     "proxy_base_url": "https://dl.repo.chycloud.top",
-    "repo": "lieyanc/FireScribe"
+    "repo": "lieyanc/FireScribe",
+    "admin_token": ""
   },
   "openai": {
     "base_url": "https://api.openai.com/v1",

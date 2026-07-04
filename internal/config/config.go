@@ -127,6 +127,13 @@ func normalize(cfg *Config, defaults Config) {
 	if cfg.Update.CheckInterval <= 0 {
 		cfg.Update.CheckInterval = defaults.Update.CheckInterval
 	}
+	cfg.Update.Source = strings.ToLower(strings.TrimSpace(cfg.Update.Source))
+	if cfg.Update.Source == "" {
+		cfg.Update.Source = defaults.Update.Source
+	}
+	if cfg.Update.Source != "proxy" {
+		cfg.Update.Source = "github"
+	}
 	if strings.TrimSpace(cfg.Update.ProxyBaseURL) == "" {
 		cfg.Update.ProxyBaseURL = defaults.Update.ProxyBaseURL
 	}

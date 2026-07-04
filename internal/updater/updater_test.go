@@ -2,7 +2,11 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +39,7 @@ func TestCheckOnlySelectsNewestStableRelease(t *testing.T) {
 
 	u := testUpdater(Config{
 		Channel:      "stable",
+		Source:       "proxy",
 		ProxyBaseURL: server.URL,
 		Repo:         "owner/repo",
 	})
@@ -89,6 +94,7 @@ func TestCheckOnlySelectsNewestPrerelease(t *testing.T) {
 
 	u := testUpdater(Config{
 		Channel:      "dev",
+		Source:       "proxy",
 		ProxyBaseURL: server.URL,
 		Repo:         "owner/repo",
 	})
@@ -142,6 +148,7 @@ func TestCheckOnlySkipsDevReleaseForSameCommit(t *testing.T) {
 
 	u := testUpdater(Config{
 		Channel:      "dev",
+		Source:       "proxy",
 		ProxyBaseURL: server.URL,
 		Repo:         "owner/repo",
 	})
@@ -168,6 +175,7 @@ func TestPerformUpdateDownloadsAndVerifiesPrerelease(t *testing.T) {
 
 	cfg := Config{
 		Channel: "dev",
+		Source:  "proxy",
 		Repo:    "owner/repo",
 	}
 	dataDir := t.TempDir()
@@ -183,6 +191,8 @@ func TestPerformUpdateDownloadsAndVerifiesPrerelease(t *testing.T) {
 	targetName := u.targetName()
 	binary := []byte("new binary")
 	sum := fmt.Sprintf("%x", sha256.Sum256(binary))
+	shaContent := sum + "  " + targetName + "\n"
+	sign := setTestSigningKey(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -202,6 +212,10 @@ func TestPerformUpdateDownloadsAndVerifiesPrerelease(t *testing.T) {
 						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/" + tag + "/" + targetName + ".sha256",
 					},
 					{
+						Name:               targetName + ".sha256.sig",
+						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/" + tag + "/" + targetName + ".sha256.sig",
+					},
+					{
 						Name:               "version.json",
 						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/" + tag + "/version.json",
 					},
@@ -210,7 +224,9 @@ func TestPerformUpdateDownloadsAndVerifiesPrerelease(t *testing.T) {
 		case "/download/owner/repo/" + tag + "/" + targetName:
 			_, _ = w.Write(binary)
 		case "/download/owner/repo/" + tag + "/" + targetName + ".sha256":
-			_, _ = w.Write([]byte(sum + "  " + targetName + "\n"))
+			_, _ = w.Write([]byte(shaContent))
+		case "/download/owner/repo/" + tag + "/" + targetName + ".sha256.sig":
+			_, _ = w.Write([]byte(sign([]byte(shaContent))))
 		case "/download/owner/repo/" + tag + "/version.json":
 			_ = json.NewEncoder(w).Encode(releaseVersionInfo{
 				Version:   remoteVersion,
@@ -280,6 +296,197 @@ func TestApplyPendingMovesToApplyingBeforeAsyncRestart(t *testing.T) {
 	}
 
 	time.Sleep(250 * time.Millisecond)
+}
+
+func TestPerformUpdateRejectsReleaseWithoutSHA256(t *testing.T) {
+	originalVersion := version.Version
+	defer func() { version.Version = originalVersion }()
+	version.Version = "v1.0.0"
+
+	cfg := Config{
+		Channel: "stable",
+		Source:  "proxy",
+		Repo:    "owner/repo",
+	}
+	dataDir := t.TempDir()
+	u := New(
+		func() Config { return cfg },
+		func() string { return dataDir },
+		log.New(io.Discard, "", 0),
+		RestartHooks{},
+	)
+
+	targetName := u.targetName()
+	binary := []byte("new binary")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/releases/owner/repo/latest":
+			_ = json.NewEncoder(w).Encode(releaseInfo{
+				TagName: "v1.4.0",
+				Assets: []assetInfo{
+					{
+						Name:               targetName,
+						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/v1.4.0/" + targetName,
+						Size:               int64(len(binary)),
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	cfg.ProxyBaseURL = server.URL
+
+	u.performUpdate(context.Background())
+
+	status := u.Status()
+	if status.State != "failed" {
+		t.Fatalf("expected update to fail without sha256 asset, got state %q", status.State)
+	}
+	if !strings.Contains(status.Error, "sha256") {
+		t.Fatalf("expected sha256 error, got %q", status.Error)
+	}
+}
+
+func TestCheckOnlyGitHubDirectDevChannel(t *testing.T) {
+	originalVersion := version.Version
+	originalCommit := version.Commit
+	defer func() { version.Version = originalVersion }()
+	defer func() { version.Commit = originalCommit }()
+	version.Version = "dev-0007-20260401-aaaaaaa"
+	version.Commit = "aaaaaaa"
+	remoteVersion := "dev-0042-20260425-bbbbbbb"
+
+	sign := setTestSigningKey(t)
+	metadata, err := json.Marshal(releaseVersionInfo{
+		Version:   remoteVersion,
+		Commit:    "bbbbbbb",
+		BuildTime: "2026-04-25T00:00:00Z",
+		Tag:       "dev",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/owner/repo/releases/download/dev/version.json":
+			_, _ = w.Write(metadata)
+		case "/owner/repo/releases/download/dev/version.json.sig":
+			_, _ = w.Write([]byte(sign(metadata)))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	setTestGitHubBaseURL(t, server.URL)
+
+	u := testUpdater(Config{Channel: "dev", Repo: "owner/repo"})
+	result, err := u.CheckOnly(context.Background())
+	if err != nil {
+		t.Fatalf("CheckOnly returned error: %v", err)
+	}
+	if !result.HasUpdate {
+		t.Fatalf("expected update to be available")
+	}
+	if result.LatestVersion != remoteVersion {
+		t.Fatalf("expected latest version %q, got %q", remoteVersion, result.LatestVersion)
+	}
+}
+
+func TestCheckOnlyGitHubDirectStableChannel(t *testing.T) {
+	originalVersion := version.Version
+	defer func() { version.Version = originalVersion }()
+	version.Version = "v1.0.0"
+
+	sign := setTestSigningKey(t)
+	metadata, err := json.Marshal(releaseVersionInfo{
+		Version:   "v1.4.0",
+		Commit:    "bbbbbbb",
+		BuildTime: "2026-04-25T00:00:00Z",
+		Tag:       "v1.4.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/owner/repo/releases/latest/download/version.json":
+			_, _ = w.Write(metadata)
+		case "/owner/repo/releases/download/v1.4.0/version.json.sig":
+			_, _ = w.Write([]byte(sign(metadata)))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	setTestGitHubBaseURL(t, server.URL)
+
+	u := testUpdater(Config{Channel: "stable", Repo: "owner/repo"})
+	result, err := u.CheckOnly(context.Background())
+	if err != nil {
+		t.Fatalf("CheckOnly returned error: %v", err)
+	}
+	if !result.HasUpdate {
+		t.Fatalf("expected update to be available")
+	}
+	if result.LatestVersion != "v1.4.0" {
+		t.Fatalf("expected latest version v1.4.0, got %q", result.LatestVersion)
+	}
+}
+
+func TestCheckOnlyGitHubDirectRejectsBadSignature(t *testing.T) {
+	originalVersion := version.Version
+	defer func() { version.Version = originalVersion }()
+	version.Version = "v1.0.0"
+
+	setTestSigningKey(t)
+	metadata, err := json.Marshal(releaseVersionInfo{Version: "v1.4.0", Tag: "v1.4.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/owner/repo/releases/latest/download/version.json":
+			_, _ = w.Write(metadata)
+		case "/owner/repo/releases/download/v1.4.0/version.json.sig":
+			_, _ = w.Write([]byte("bm90IGEgcmVhbCBzaWduYXR1cmU=")) // valid base64, wrong signature
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	setTestGitHubBaseURL(t, server.URL)
+
+	u := testUpdater(Config{Channel: "stable", Repo: "owner/repo"})
+	if _, err := u.CheckOnly(context.Background()); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("expected signature verification error, got %v", err)
+	}
+}
+
+func setTestSigningKey(t *testing.T) func(data []byte) string {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test signing key: %v", err)
+	}
+	original := signingPublicKeyHex
+	signingPublicKeyHex = hex.EncodeToString(pub)
+	t.Cleanup(func() { signingPublicKeyHex = original })
+	return func(data []byte) string {
+		return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, data))
+	}
+}
+
+func setTestGitHubBaseURL(t *testing.T, url string) {
+	t.Helper()
+	original := githubBaseURL
+	githubBaseURL = url
+	t.Cleanup(func() { githubBaseURL = original })
 }
 
 func testUpdater(cfg Config) *Updater {

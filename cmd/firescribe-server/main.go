@@ -44,6 +44,12 @@ func main() {
 	rec := buildRecognizer(cfg)
 	application := app.New(app.NewStore(conn), files, rec)
 
+	if n, err := application.Store.FailInterruptedJobs(context.Background()); err != nil {
+		log.Printf("recover interrupted jobs: %v", err)
+	} else if n > 0 {
+		log.Printf("marked %d interrupted job(s) as failed", n)
+	}
+
 	bgCtx, cancelBackground := context.WithCancel(context.Background())
 	defer cancelBackground()
 
@@ -93,6 +99,15 @@ func main() {
 				case restartErrCh <- err:
 				default:
 				}
+			},
+			IsBusy: func() bool {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				busy, err := application.Store.HasActiveJobs(ctx)
+				if err != nil {
+					return false
+				}
+				return busy
 			},
 		},
 	)
