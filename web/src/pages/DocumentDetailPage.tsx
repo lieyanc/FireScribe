@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  Ban,
   ChevronDown,
   Download,
   FileText,
@@ -12,6 +13,7 @@ import {
   Pencil,
   Play,
   RefreshCw,
+  RotateCcw,
   RotateCw,
 } from "lucide-react";
 import { EmptyState, ErrorMessage, IconTooltipButton, MetricCard, PageHeader } from "../components/app/chrome";
@@ -35,21 +37,49 @@ import {
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Progress } from "../components/ui/progress";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { toast } from "../components/ui/toaster";
 import {
+  cancelRun,
   exportDocument,
   getDocument,
   listDocumentAssets,
   listPages,
   listRecognitionRuns,
+  listRunPages,
   patchDocument,
+  retryRun,
   startRecognition,
+  ApiError,
   type Document,
   type DocumentAsset,
+  type RecognitionRun,
 } from "../lib/api";
-import { formatBytes, formatTime } from "../lib/utils";
+import { cn, formatBytes, formatTime } from "../lib/utils";
+
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
+
+const RUN_STATUS_META: Record<string, { label: string; tone: string }> = {
+  queued: { label: "排队中", tone: "border-accent bg-accent text-accent-foreground" },
+  running: { label: "识别中", tone: "border-accent bg-accent text-accent-foreground" },
+  succeeded: { label: "已完成", tone: "border-primary/25 bg-primary/10 text-primary" },
+  partial: { label: "部分失败", tone: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+  failed: { label: "失败", tone: "border-destructive/20 bg-destructive/10 text-destructive" },
+  canceled: { label: "已取消", tone: "border-destructive/20 bg-destructive/10 text-destructive" },
+};
+
+function RunStatusBadge({ status }: { status: string }) {
+  const meta = RUN_STATUS_META[status] ?? { label: status, tone: "border-transparent bg-secondary text-secondary-foreground" };
+  return (
+    <span className={cn("inline-flex h-6 items-center rounded-md border px-2.5 text-xs font-semibold", meta.tone)}>
+      {meta.label}
+    </span>
+  );
+}
 
 const ASSET_ROLE_LABELS: Record<string, string> = {
   original: "原件",
@@ -288,6 +318,204 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
   );
 }
 
+function FailedPagesList({ runID }: { runID: string }) {
+  const pages = useQuery({
+    queryKey: ["run-pages", runID],
+    queryFn: () => listRunPages(runID),
+    enabled: !!runID,
+  });
+  const failed = (pages.data ?? []).filter((page) => page.status === "failed" || page.status === "canceled");
+
+  if (pages.isLoading) {
+    return <div className="text-sm text-muted-foreground">加载失败页…</div>;
+  }
+  if (pages.error) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-destructive">
+        <span>无法加载失败页详情：{pages.error.message}</span>
+        <Button size="sm" variant="ghost" onClick={() => void pages.refetch()}>
+          重试
+        </Button>
+      </div>
+    );
+  }
+  if (!failed.length) {
+    return null;
+  }
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-medium text-muted-foreground">失败页面({failed.length})</div>
+      <ul className="space-y-1">
+        {failed.map((page) => (
+          <li key={page.page_id} className="flex items-start gap-2 text-sm">
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground">
+              第 {page.page_no} 页
+            </span>
+            {page.error ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="min-w-0 flex-1 cursor-help truncate text-destructive">{page.error}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="start" className="max-w-sm whitespace-pre-wrap break-words">
+                  {page.error}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="min-w-0 flex-1 text-muted-foreground">{page.status === "canceled" ? "已取消" : "识别失败"}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RecognitionSection({
+  documentID,
+  runs,
+  isLoading,
+}: {
+  documentID: string;
+  runs: RecognitionRun[];
+  isLoading: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const latest = runs[0];
+  const latestActive = latest ? ACTIVE_RUN_STATUSES.has(latest.status) : false;
+  const latestHasFailures = latest ? ["partial", "failed", "canceled"].includes(latest.status) && latest.failed_pages > 0 : false;
+  const progressValue = latest && latest.total_pages > 0 ? Math.round((latest.done_pages / latest.total_pages) * 100) : 0;
+
+  const cancel = useMutation({
+    mutationFn: (runID: string) => cancelRun(runID),
+    onSuccess: () => {
+      toast({ title: "正在取消识别任务" });
+      queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
+    },
+    onError: (error: Error) => toast({ title: "取消失败", description: error.message, variant: "error" }),
+  });
+  const retry = useMutation({
+    mutationFn: (runID: string) => retryRun(runID),
+    onSuccess: () => {
+      toast({ title: "已开始重试失败页", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
+      queryClient.invalidateQueries({ queryKey: ["pages", documentID] });
+      queryClient.invalidateQueries({ queryKey: ["document", documentID] });
+    },
+    onError: (error: Error) => toast({ title: "无法重试", description: error.message, variant: "error" }),
+  });
+
+  return (
+    <div className="space-y-3">
+      {latest ? (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 pb-3">
+            <CardTitle className="inline-flex min-w-0 items-center gap-2 text-base">
+              <span className="truncate">最新识别</span>
+              <RunStatusBadge status={latest.status} />
+            </CardTitle>
+            <div className="flex shrink-0 items-center gap-2">
+              {latestActive ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={cancel.isPending}
+                  onClick={() => cancel.mutate(latest.id)}
+                >
+                  <Ban className="size-4" />
+                  取消
+                </Button>
+              ) : null}
+              {latestHasFailures ? (
+                <Button variant="secondary" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(latest.id)}>
+                  <RotateCcw className="size-4" />
+                  重试失败页
+                </Button>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Progress value={progressValue} className="flex-1" />
+              <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
+                {latest.done_pages}/{latest.total_pages} 页
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>{latest.provider} · {latest.model || "未配置模型"}</span>
+              {latest.failed_pages > 0 ? <span className="text-destructive">失败 {latest.failed_pages} 页</span> : null}
+              <span>{formatTime(latest.created_at)}</span>
+            </div>
+            {latest.error ? (
+              <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {latest.error}
+              </div>
+            ) : null}
+            {latestHasFailures ? <FailedPagesList runID={latest.id} /> : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">识别运行</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>模型</TableHead>
+                <TableHead className="w-28">状态</TableHead>
+                <TableHead className="hidden w-24 sm:table-cell">进度</TableHead>
+                <TableHead className="hidden w-40 md:table-cell">创建</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.length ? (
+                runs.map((run) => (
+                  <TableRow key={run.id}>
+                    <TableCell className="min-w-0">
+                      <div className="truncate font-medium">
+                        {run.provider} · {run.model || "未配置模型"}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground sm:hidden">
+                        {run.done_pages}/{run.total_pages} 页 · {formatTime(run.created_at)}
+                      </div>
+                      {run.error ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="mt-1 max-w-md cursor-help truncate text-xs text-destructive">{run.error}</div>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" align="start" className="max-w-sm whitespace-pre-wrap break-words">
+                            {run.error}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <RunStatusBadge status={run.status} />
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">
+                      <span className="tabular-nums">{run.done_pages}/{run.total_pages}</span>
+                      {run.failed_pages > 0 ? <span className="ml-1 text-destructive">(-{run.failed_pages})</span> : null}
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">{formatTime(run.created_at)}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={4}>
+                    <EmptyState title={isLoading ? "加载中" : "暂无运行记录"} className="min-h-32" />
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export function DocumentDetailPage() {
   const { documentID = "" } = useParams();
   const navigate = useNavigate();
@@ -303,13 +531,24 @@ export function DocumentDetailPage() {
     queryKey: ["runs", documentID],
     queryFn: () => listRecognitionRuns(documentID),
     enabled: !!documentID,
-    refetchInterval: 2500,
+    refetchInterval: (query) => {
+      const latest = query.state.data?.[0];
+      return latest && ACTIVE_RUN_STATUSES.has(latest.status) ? 1500 : 4000;
+    },
   });
   const recognition = useMutation({
     mutationFn: () => startRecognition(documentID),
     onSuccess: () => {
+      toast({ title: "已开始识别", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["document", documentID] });
       queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
+    },
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        toast({ title: "已有识别任务进行中", variant: "error" });
+        return;
+      }
+      toast({ title: "启动识别失败", description: error.message, variant: "error" });
     },
   });
   const exportMutation = useMutation({
@@ -323,6 +562,7 @@ export function DocumentDetailPage() {
   const firstPageID = pages.data?.[0]?.page_id;
   const pageItems = pages.data ?? [];
   const runItems = runs.data ?? [];
+  const hasActiveRun = runItems.some((run) => ACTIVE_RUN_STATUSES.has(run.status));
   const recognizedPages = pageItems.filter((page) => page.recognition_count > 0).length;
   const verifiedPages = pageItems.filter((page) => page.has_final).length;
 
@@ -341,9 +581,9 @@ export function DocumentDetailPage() {
           <IconTooltipButton label="刷新" variant="outline" size="icon" onClick={() => pages.refetch()}>
             <RefreshCw className="size-4" />
           </IconTooltipButton>
-          <Button onClick={() => recognition.mutate()} disabled={recognition.isPending || !pageItems.length}>
+          <Button onClick={() => recognition.mutate()} disabled={recognition.isPending || !pageItems.length || hasActiveRun}>
             <Play className="size-4" />
-            {recognition.isPending ? "排队中" : "识别"}
+            {recognition.isPending ? "排队中" : hasActiveRun ? "识别中" : "识别"}
           </Button>
           <Button variant="secondary" disabled={!firstPageID} onClick={() => navigate(`/review/${documentID}/${firstPageID}`)}>
             <FileText className="size-4" />
@@ -382,7 +622,7 @@ export function DocumentDetailPage() {
         <MetricCard icon={<RotateCw className="size-4" />} label="运行" value={runItems.length} hint={runItems[0] ? formatTime(runItems[0].created_at) : "暂无"} />
       </section>
 
-      <ErrorMessage message={recognition.error?.message || exportMutation.error?.message} />
+      <ErrorMessage message={exportMutation.error?.message} />
 
       <section className="grid items-start gap-3 xl:grid-cols-2">
         <DocumentInfoCard documentID={documentID} doc={doc.data} />
@@ -431,46 +671,7 @@ export function DocumentDetailPage() {
         ) : null}
       </section>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">识别运行</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>模型</TableHead>
-                <TableHead className="w-28">状态</TableHead>
-                <TableHead className="hidden w-40 sm:table-cell">创建</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runItems.length ? (
-                runItems.map((run) => (
-                  <TableRow key={run.id}>
-                    <TableCell className="min-w-0">
-                      <div className="truncate font-medium">
-                        {run.provider} · {run.model || "未配置模型"}
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground sm:hidden">{formatTime(run.created_at)}</div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge value={run.status} />
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{formatTime(run.created_at)}</TableCell>
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={3}>
-                    <EmptyState title="暂无运行记录" className="min-h-32" />
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <RecognitionSection documentID={documentID} runs={runItems} isLoading={runs.isLoading} />
     </div>
   );
 }

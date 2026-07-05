@@ -1,22 +1,25 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NavLink, Route, Routes } from "react-router-dom";
-import { BookOpenText, BriefcaseBusiness, ListChecks, Moon, RefreshCw, Sun } from "lucide-react";
+import { BookOpenText, BriefcaseBusiness, ListChecks, Moon, RefreshCw, Settings2, Sun } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { DocumentDetailPage } from "./pages/DocumentDetailPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { JobsPage } from "./pages/JobsPage";
 import { SystemPage } from "./pages/SystemPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { cn } from "./lib/utils";
 import { Button } from "./components/ui/button";
 import { Separator } from "./components/ui/separator";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { Toaster } from "./components/ui/toaster";
 
 const queryClient = new QueryClient();
 const themeStorageKey = "firescribe-theme";
 const navItems = [
   { to: "/", icon: <BriefcaseBusiness className="size-4" />, label: "文档" },
   { to: "/jobs", icon: <ListChecks className="size-4" />, label: "任务" },
+  { to: "/settings", icon: <Settings2 className="size-4" />, label: "设置" },
   { to: "/system", icon: <RefreshCw className="size-4" />, label: "系统" },
 ];
 
@@ -74,11 +77,13 @@ export function App() {
                   <Route path="/review/:documentID" element={<ReviewPage />} />
                   <Route path="/review/:documentID/:pageID" element={<ReviewPage />} />
                   <Route path="/jobs" element={<JobsPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/system" element={<SystemPage />} />
                 </Routes>
               </main>
             </div>
           </div>
+          <Toaster />
         </div>
       </TooltipProvider>
     </QueryClientProvider>

@@ -1,7 +1,7 @@
 import { FormEvent, MouseEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowUpRight, BookOpenText, CheckCircle2, Clock3, FileSearch, FileText, Search, Upload } from "lucide-react";
+import { ArrowUpRight, BookOpenText, CheckCircle2, Clock3, FileSearch, FileText, Search, Upload, X } from "lucide-react";
 import { EmptyState, ErrorMessage, IconTooltipButton, MetricCard, PageHeader } from "../components/app/chrome";
 import { TagChips } from "../components/app/tags";
 import { Badge } from "../components/ui/badge";
@@ -22,7 +22,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { importDocument, listDocuments, listTags, searchText } from "../lib/api";
-import { formatTime } from "../lib/utils";
+import { formatBytes, formatTime } from "../lib/utils";
 
 const statusOptions = [
   { value: "all", label: "全部状态" },
@@ -262,7 +262,7 @@ export function DocumentsPage() {
 
 function ImportDocumentDialog() {
   const [open, setOpen] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [fileKey, setFileKey] = useState(0);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
@@ -282,7 +282,7 @@ function ImportDocumentDialog() {
   });
 
   function resetForm() {
-    setFile(null);
+    setFiles([]);
     setFileKey((key) => key + 1);
     setTitle("");
     setAuthor("");
@@ -298,15 +298,30 @@ function ImportDocumentDialog() {
 
   function submitUpload(event: FormEvent) {
     event.preventDefault();
-    if (!file) return;
-    upload.mutate({ file, title, author, source, description });
+    if (!files.length) return;
+    upload.mutate({ files, title, author, source, description });
   }
 
-  function updateFile(nextFile: File | null) {
-    setFile(nextFile);
-    if (nextFile && !title.trim()) {
-      setTitle(nextFile.name.replace(/\.[^.]+$/, ""));
-    }
+  function addFiles(incoming: FileList | null) {
+    const list = incoming ? Array.from(incoming) : [];
+    if (!list.length) return;
+    setFiles((prev) => {
+      const next = [...prev];
+      for (const file of list) {
+        if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) {
+          next.push(file);
+        }
+      }
+      if (!title.trim() && next[0]) {
+        setTitle(next[0].name.replace(/\.[^.]+$/, ""));
+      }
+      return next;
+    });
+    setFileKey((key) => key + 1);
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   return (
@@ -319,7 +334,9 @@ function ImportDocumentDialog() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导入文档</DialogTitle>
-            <DialogDescription>上传 PDF 或图片,系统会自动拆分页面并进入识别流程。</DialogDescription>
+            <DialogDescription>
+              上传一个或多个 PDF 或图片,按上传顺序合并为同一文档;每张图片为一页,PDF 会自动拆分为多页。
+            </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submitUpload}>
             <div className="grid gap-2">
@@ -328,9 +345,35 @@ function ImportDocumentDialog() {
                 key={fileKey}
                 id="document-file"
                 type="file"
-                accept="application/pdf,image/*"
-                onChange={(event) => updateFile(event.target.files?.[0] ?? null)}
+                multiple
+                accept="application/pdf,image/*,.tif,.tiff,.bmp"
+                onChange={(event) => addFiles(event.target.files)}
               />
+              {files.length ? (
+                <ul className="mt-1 space-y-1.5 rounded-md border bg-muted/30 p-2">
+                  {files.map((file, index) => (
+                    <li key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center gap-2 text-sm">
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-xs tabular-nums text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <FileText className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate" title={file.name}>
+                        {file.name}
+                      </span>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(file.size)}</span>
+                      <button
+                        type="button"
+                        aria-label={`移除 ${file.name}`}
+                        className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                        disabled={upload.isPending}
+                        onClick={() => removeFile(index)}
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="document-title">标题</Label>
@@ -360,9 +403,9 @@ function ImportDocumentDialog() {
               <Button type="button" variant="outline" disabled={upload.isPending} onClick={() => onOpenChange(false)}>
                 取消
               </Button>
-              <Button type="submit" disabled={!file || upload.isPending}>
+              <Button type="submit" disabled={!files.length || upload.isPending}>
                 <Upload className="size-4" />
-                {upload.isPending ? "导入中" : "导入"}
+                {upload.isPending ? "导入中" : files.length > 1 ? `导入 ${files.length} 个文件` : "导入"}
               </Button>
             </DialogFooter>
           </form>

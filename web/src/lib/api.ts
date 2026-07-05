@@ -47,9 +47,52 @@ export type RecognitionRun = {
   prompt_version: string;
   config_json: string;
   status: string;
+  total_pages: number;
+  done_pages: number;
+  failed_pages: number;
+  error: string;
   started_at: string;
   finished_at: string;
   created_at: string;
+};
+
+export type RunPage = {
+  run_id: string;
+  page_id: string;
+  page_no: number;
+  status: string;
+  attempts: number;
+  error: string;
+  started_at: string;
+  finished_at: string;
+};
+
+export type OpenAISettings = {
+  base_url: string;
+  model: string;
+  api_key_set: boolean;
+  prompt_version: string;
+  temperature: number;
+  max_tokens: number;
+  max_image_edge: number;
+  retry_attempts: number;
+};
+
+export type Settings = {
+  use_mock_ocr: boolean;
+  request_timeout_seconds: number;
+  pdf_render_dpi: number;
+  prompt_path: string;
+  prompt: string;
+  openai: OpenAISettings;
+};
+
+export type SettingsInput = {
+  use_mock_ocr?: boolean;
+  request_timeout_seconds?: number;
+  pdf_render_dpi?: number;
+  prompt?: string;
+  openai?: Partial<Omit<OpenAISettings, "api_key_set">> & { api_key?: string };
 };
 
 export type RecognitionResult = {
@@ -185,6 +228,15 @@ function adminHeaders(): Record<string, string> {
   return token ? { "X-Admin-Token": token } : {};
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
@@ -195,7 +247,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep status text
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -227,14 +279,16 @@ export function patchDocument(
 }
 
 export function importDocument(input: {
-  file: File;
+  files: File[];
   title?: string;
   author?: string;
   source?: string;
   description?: string;
 }) {
   const form = new FormData();
-  form.set("file", input.file);
+  for (const file of input.files) {
+    form.append("files", file);
+  }
   if (input.title) form.set("title", input.title);
   if (input.author) form.set("author", input.author);
   if (input.source) form.set("source", input.source);
@@ -266,14 +320,33 @@ export function getPage(pageID: string) {
   return apiFetch<PageDetail>(`/api/pages/${pageID}`);
 }
 
-export function startRecognition(documentID: string) {
+export function startRecognition(documentID: string, pageIDs?: string[]) {
+  const hasPages = pageIDs && pageIDs.length > 0;
   return apiFetch<{ run: RecognitionRun; job: Job }>(`/api/documents/${documentID}/recognition-runs`, {
     method: "POST",
+    headers: hasPages ? { "Content-Type": "application/json" } : undefined,
+    body: hasPages ? JSON.stringify({ page_ids: pageIDs }) : undefined,
   });
 }
 
 export function listRecognitionRuns(documentID: string) {
   return apiFetch<RecognitionRun[]>(`/api/documents/${documentID}/recognition-runs`);
+}
+
+export function getRecognitionRun(runID: string) {
+  return apiFetch<RecognitionRun>(`/api/recognition-runs/${runID}`);
+}
+
+export function listRunPages(runID: string) {
+  return apiFetch<RunPage[]>(`/api/recognition-runs/${runID}/pages`);
+}
+
+export function retryRun(runID: string) {
+  return apiFetch<{ run: RecognitionRun; job: Job }>(`/api/recognition-runs/${runID}/retry`, { method: "POST" });
+}
+
+export function cancelRun(runID: string) {
+  return apiFetch<{ status: string }>(`/api/recognition-runs/${runID}/cancel`, { method: "POST" });
 }
 
 export function listRecognitionResults(pageID: string) {
@@ -369,4 +442,16 @@ export function applyUpdate() {
 
 export function dismissUpdate() {
   return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST", headers: adminHeaders() });
+}
+
+export function getSettings() {
+  return apiFetch<Settings>("/api/settings");
+}
+
+export function updateSettings(input: SettingsInput) {
+  return apiFetch<Settings>("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    body: JSON.stringify(input),
+  });
 }
