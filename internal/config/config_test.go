@@ -99,8 +99,17 @@ func TestLoadFileCompletesMissingTopLevelAndNestedFields(t *testing.T) {
 	if openAI["model"] != "vision-model" {
 		t.Fatalf("persisted openai.model = %v", openAI["model"])
 	}
-	if openAI["max_tokens"].(float64) != 4096 {
+	if openAI["max_tokens"].(float64) != 32768 {
 		t.Fatalf("persisted openai.max_tokens = %v", openAI["max_tokens"])
+	}
+	if openAI["max_image_edge"].(float64) != 2048 {
+		t.Fatalf("persisted openai.max_image_edge = %v", openAI["max_image_edge"])
+	}
+	if openAI["retry_attempts"].(float64) != 3 {
+		t.Fatalf("persisted openai.retry_attempts = %v", openAI["retry_attempts"])
+	}
+	if persisted["pdf_render_dpi"].(float64) != 200 {
+		t.Fatalf("persisted pdf_render_dpi = %v", persisted["pdf_render_dpi"])
 	}
 	update, ok := persisted["update"].(map[string]any)
 	if !ok {

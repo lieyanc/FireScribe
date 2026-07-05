@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lieyan/firescribe/internal/updater"
@@ -27,6 +28,7 @@ type Config struct {
 	UseMockOCR            bool           `json:"use_mock_ocr"`
 	RequestTimeoutSeconds int            `json:"request_timeout_seconds"`
 	RequestTimeout        time.Duration  `json:"-"`
+	PDFRenderDPI          int            `json:"pdf_render_dpi"`
 	OpenAI                OpenAIConfig   `json:"openai"`
 	Update                updater.Config `json:"update"`
 }
@@ -38,6 +40,8 @@ type OpenAIConfig struct {
 	PromptVersion string  `json:"prompt_version"`
 	Temperature   float64 `json:"temperature"`
 	MaxTokens     int     `json:"max_tokens"`
+	MaxImageEdge  int     `json:"max_image_edge"`
+	RetryAttempts int     `json:"retry_attempts"`
 }
 
 func Load() (Config, error) {
@@ -117,6 +121,29 @@ func normalize(cfg *Config, defaults Config) {
 		cfg.RequestTimeoutSeconds = defaults.RequestTimeoutSeconds
 	}
 	cfg.RequestTimeout = time.Duration(cfg.RequestTimeoutSeconds) * time.Second
+	if cfg.PDFRenderDPI <= 0 {
+		cfg.PDFRenderDPI = defaults.PDFRenderDPI
+	}
+	cfg.PDFRenderDPI = clampInt(cfg.PDFRenderDPI, 72, 600)
+	if cfg.OpenAI.MaxTokens <= 0 {
+		cfg.OpenAI.MaxTokens = defaults.OpenAI.MaxTokens
+	}
+	if cfg.OpenAI.MaxImageEdge < 0 {
+		cfg.OpenAI.MaxImageEdge = defaults.OpenAI.MaxImageEdge
+	}
+	if cfg.OpenAI.MaxImageEdge > 0 {
+		cfg.OpenAI.MaxImageEdge = clampInt(cfg.OpenAI.MaxImageEdge, 256, 8192)
+	}
+	if cfg.OpenAI.RetryAttempts <= 0 {
+		cfg.OpenAI.RetryAttempts = defaults.OpenAI.RetryAttempts
+	}
+	cfg.OpenAI.RetryAttempts = clampInt(cfg.OpenAI.RetryAttempts, 1, 10)
+	if cfg.OpenAI.Temperature < 0 {
+		cfg.OpenAI.Temperature = 0
+	}
+	if cfg.OpenAI.Temperature > 2 {
+		cfg.OpenAI.Temperature = 2
+	}
 	cfg.Update.Channel = strings.ToLower(strings.TrimSpace(cfg.Update.Channel))
 	if cfg.Update.Channel == "" {
 		cfg.Update.Channel = defaults.Update.Channel
@@ -205,4 +232,97 @@ func writeFile(path string, raw []byte) error {
 		return fmt.Errorf("write config %s: %w", path, err)
 	}
 	return nil
+}
+
+func clampInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+// Save persists cfg back to its config file, overwriting the keys managed by
+// Config while preserving unknown top-level keys that may exist in the file.
+func Save(cfg Config) error {
+	path := cfg.Path
+	if strings.TrimSpace(path) == "" {
+		path = DefaultPath
+	}
+	existing := map[string]json.RawMessage{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	var managed map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &managed); err != nil {
+		return fmt.Errorf("prepare config for %s: %w", path, err)
+	}
+	for key, value := range managed {
+		existing[key] = value
+	}
+	return writeRawConfig(path, existing)
+}
+
+// Runtime holds the live configuration shared between the HTTP layer and the
+// components rebuilt when settings change (recognizer, import pipeline).
+type Runtime struct {
+	mu      sync.RWMutex
+	cfg     Config
+	onApply []func(Config)
+}
+
+func NewRuntime(cfg Config) *Runtime {
+	return &Runtime{cfg: cfg}
+}
+
+func (r *Runtime) Config() Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cfg
+}
+
+// OnApply registers a callback invoked (outside the lock) with the new config
+// after every successful Apply.
+func (r *Runtime) OnApply(fn func(Config)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onApply = append(r.onApply, fn)
+}
+
+// Apply mutates a copy of the current config, normalizes and persists it, then
+// swaps it in and notifies subscribers.
+func (r *Runtime) Apply(mutate func(*Config) error) (Config, error) {
+	r.mu.Lock()
+	next := r.cfg
+	if err := mutate(&next); err != nil {
+		r.mu.Unlock()
+		return Config{}, err
+	}
+	defaults, err := defaultConfig(next.Path)
+	if err != nil {
+		r.mu.Unlock()
+		return Config{}, err
+	}
+	normalize(&next, defaults)
+	if err := Save(next); err != nil {
+		r.mu.Unlock()
+		return Config{}, err
+	}
+	r.cfg = next
+	callbacks := append([]func(Config){}, r.onApply...)
+	r.mu.Unlock()
+	for _, fn := range callbacks {
+		fn(next)
+	}
+	return next, nil
 }
