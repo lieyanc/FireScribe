@@ -13,7 +13,7 @@ FireScribe 是一个面向扫描手写文章的转录、审校和归档工作台
 
 - Go 1.26+
 - Node.js 24+
-- Poppler `pdfimages`（PDF 按原始页图提取）
+- Poppler `pdftoppm`（PDF 按页光栅化,poppler-utils 提供）
 - 内置纯 Go SQLite，支持 FTS5/trigram；Makefile/CI 统一带 `sqlite_fts5` tag
 
 安装前端依赖并构建：
@@ -64,9 +64,20 @@ Vite 开发服务会把 `/api` 代理到 `localhost:8080`。
 - `database_path`：数据库路径，默认 `data/firescribe.db`
 - `web_dir`：静态前端目录，默认 `web/dist`
 - `prompt_path`：转录 prompt 文件，默认 `prompts/vlm_transcribe_page_v1.txt`
-- `request_timeout_seconds`：OCR 请求超时秒数，默认 `120`
+- `request_timeout_seconds`：OCR 单次请求超时秒数，默认 `120`
+- `pdf_render_dpi`：PDF 导入光栅化 DPI，默认 `200`
 - `update`：OTA 配置，包含 `enabled`、`channel`、`check_interval`、`proxy_base_url`、`repo`
-- `openai`：OpenAI 兼容 OCR/VLM 配置，包含 `base_url`、`api_key`、`model`、`prompt_version`、`temperature`、`max_tokens`
+- `openai`：OpenAI 兼容 OCR/VLM 配置，包含 `base_url`、`api_key`、`model`、`prompt_version`、`temperature`、`max_tokens`（默认 `32768`,输出超限会被判定为截断失败）、`max_image_edge`（上送前长边像素上限,默认 `2048`,`0` 关闭缩放）、`retry_attempts`（429/5xx/网络错误的重试次数,默认 `3`）
+
+以上 OCR 相关配置也可以在网页设置页中修改（`GET/PUT /api/settings`,修改会热生效并写回 `config.json`;远程访问修改需配置 `update.admin_token`）。
+
+## 识别管线
+
+- 导入支持一次上传多个文件：多张图片按顺序合成一个文档的多页;PDF 用 `pdftoppm` 按页光栅化;TIFF/BMP/GIF 会转码为 JPEG。
+- 每次识别是一个 run,按页跟踪状态与错误（`GET /api/recognition-runs/{id}/pages`）,进度字段 `done_pages/total_pages/failed_pages` 可轮询。
+- 部分页失败时 run 标记 `partial`,可通过 `POST /api/recognition-runs/{id}/retry` 只重跑未成功的页;进行中的 run 可 `POST .../cancel` 取消,同一文档同时只允许一个活跃 run（重复启动返回 409）。
+- 识别输出会检查 `finish_reason`,被 `max_tokens` 截断或返回空文本都会判为该页失败,不会静默存入截断文本。
+- 服务重启会把中断的 run/页标记为失败并复位文档状态,随后可整体重试。
 
 ## OTA 与 CI
 
