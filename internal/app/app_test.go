@@ -32,7 +32,8 @@ func TestMVPWorkflowImportRecognizeReviewSearchExport(t *testing.T) {
 	}
 	application := app.New(app.NewStore(conn), files, recognizer.MockRecognizer{})
 
-	doc, err := application.ImportDocument(ctx, "page.png", bytes.NewReader(testPNG(t)), app.ImportOptions{Title: "测试手稿"})
+	doc, err := application.ImportDocument(ctx, app.ImportOptions{Title: "测试手稿"},
+		app.ImportFile{Name: "page.png", Reader: bytes.NewReader(testPNG(t))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestMVPWorkflowImportRecognizeReviewSearchExport(t *testing.T) {
 		t.Fatalf("expected original/page assets, got %+v", assets)
 	}
 
-	start, err := application.StartRecognition(ctx, doc.ID)
+	start, err := application.StartRecognition(ctx, doc.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

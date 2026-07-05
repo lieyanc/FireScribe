@@ -41,10 +41,16 @@ func main() {
 		log.Fatalf("prepare storage: %v", err)
 	}
 
-	rec := buildRecognizer(cfg)
-	application := app.New(app.NewStore(conn), files, rec)
+	application := app.New(app.NewStore(conn), files, recognizer.Build(cfg))
+	application.SetOptions(app.Options{PDFRenderDPI: cfg.PDFRenderDPI})
 
-	if n, err := application.Store.FailInterruptedJobs(context.Background()); err != nil {
+	runtime := config.NewRuntime(cfg)
+	runtime.OnApply(func(next config.Config) {
+		application.SetRecognizer(recognizer.Build(next))
+		application.SetOptions(app.Options{PDFRenderDPI: next.PDFRenderDPI})
+	})
+
+	if n, err := application.Store.RecoverInterrupted(context.Background()); err != nil {
 		log.Printf("recover interrupted jobs: %v", err)
 	} else if n > 0 {
 		log.Printf("marked %d interrupted job(s) as failed", n)
@@ -60,6 +66,14 @@ func main() {
 		})
 	}
 	defer closeResources()
+
+	// stopWorkers cancels active recognition runs and waits for their workers
+	// to persist terminal state before the process exits or re-execs.
+	stopWorkers := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		application.Shutdown(ctx)
+	}
 
 	var restartMu sync.Mutex
 	restarting := false
@@ -84,6 +98,7 @@ func main() {
 			BeforeExec: func(tag string) error {
 				markRestarting()
 				cancelBackground()
+				stopWorkers()
 
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				defer cancel()
@@ -114,7 +129,7 @@ func main() {
 
 	server = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.New(application, cfg.WebDir, api.UpdateRuntime{Updater: upd, Config: cfg.Update}).Routes(),
+		Handler:           api.New(application, cfg.WebDir, runtime, api.UpdateRuntime{Updater: upd, Config: cfg.Update}).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	upd.StartBackground(bgCtx)
@@ -146,6 +161,7 @@ func main() {
 		log.Fatalf("serve: %v", err)
 	case <-stop:
 		cancelBackground()
+		stopWorkers()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
@@ -154,26 +170,4 @@ func main() {
 	case err := <-restartErrCh:
 		log.Fatal(err)
 	}
-}
-
-func buildRecognizer(cfg config.Config) recognizer.Recognizer {
-	if cfg.UseMockOCR {
-		log.Printf("OCR recognizer: mock (set use_mock_ocr=false, openai.model and openai.api_key in %s to use OpenAI compatible OCR)", cfg.Path)
-		return recognizer.MockRecognizer{}
-	}
-	prompt, err := os.ReadFile(cfg.PromptPath)
-	if err != nil {
-		log.Printf("read prompt %s: %v", cfg.PromptPath, err)
-	}
-	log.Printf("OCR recognizer: OpenAI compatible model=%s base_url=%s", cfg.OpenAI.Model, cfg.OpenAI.BaseURL)
-	return recognizer.NewOpenAI(recognizer.OpenAIConfig{
-		BaseURL:       cfg.OpenAI.BaseURL,
-		APIKey:        cfg.OpenAI.APIKey,
-		Model:         cfg.OpenAI.Model,
-		Prompt:        string(prompt),
-		PromptVersion: cfg.OpenAI.PromptVersion,
-		Temperature:   cfg.OpenAI.Temperature,
-		MaxTokens:     cfg.OpenAI.MaxTokens,
-		Timeout:       cfg.RequestTimeout,
-	})
 }

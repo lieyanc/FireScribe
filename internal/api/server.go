@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/lieyan/firescribe/internal/app"
+	"github.com/lieyan/firescribe/internal/config"
 	"github.com/lieyan/firescribe/internal/updater"
 	"github.com/lieyan/firescribe/internal/version"
 )
@@ -31,6 +32,7 @@ type Server struct {
 	app       *app.App
 	webDir    string
 	webFS     fs.FS
+	runtime   *config.Runtime
 	updater   *updater.Updater
 	updateCfg updater.Config
 }
@@ -40,9 +42,9 @@ type UpdateRuntime struct {
 	Config  updater.Config
 }
 
-func New(application *app.App, webDir string, updateRuntime ...UpdateRuntime) *Server {
+func New(application *app.App, webDir string, runtime *config.Runtime, updateRuntime ...UpdateRuntime) *Server {
 	embedded, _ := embeddedStaticFS()
-	server := &Server{app: application, webDir: webDir, webFS: embedded}
+	server := &Server{app: application, webDir: webDir, webFS: embedded, runtime: runtime}
 	if len(updateRuntime) > 0 {
 		server.updater = updateRuntime[0].Updater
 		server.updateCfg = updateRuntime[0].Config
@@ -88,6 +90,11 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/pages/{pageID}/text-versions", s.createTextVersion)
 
 		r.Get("/recognition-runs/{runID}", s.getRecognitionRun)
+		r.Get("/recognition-runs/{runID}/pages", s.listRunPages)
+		r.Post("/recognition-runs/{runID}/retry", s.retryRun)
+		r.Post("/recognition-runs/{runID}/cancel", s.cancelRun)
+		r.Get("/settings", s.getSettings)
+		r.Put("/settings", s.requireUpdateToken(s.putSettings))
 		r.Get("/search", s.search)
 		r.Get("/tags", s.listTags)
 		r.Get("/assets/{assetID}/download", s.downloadAsset)
@@ -245,19 +252,28 @@ func (s *Server) importDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("parse upload: %w", err))
 		return
 	}
-	file, header, err := firstUploadedFile(r.MultipartForm)
+	headers, err := uploadedFiles(r.MultipartForm)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	defer file.Close()
+	files := make([]app.ImportFile, 0, len(headers))
+	for _, header := range headers {
+		f, err := header.Open()
+		if err != nil {
+			writeError(w, fmt.Errorf("open upload %s: %w", header.Filename, err))
+			return
+		}
+		defer f.Close()
+		files = append(files, app.ImportFile{Name: header.Filename, Reader: f})
+	}
 
-	doc, err := s.app.ImportDocument(r.Context(), header.Filename, file, app.ImportOptions{
+	doc, err := s.app.ImportDocument(r.Context(), app.ImportOptions{
 		Title:       r.FormValue("title"),
 		Description: r.FormValue("description"),
 		Author:      r.FormValue("author"),
 		Source:      r.FormValue("source"),
-	})
+	}, files...)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -375,7 +391,13 @@ func (s *Server) pageThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startRecognition(w http.ResponseWriter, r *http.Request) {
-	start, err := s.app.StartRecognition(r.Context(), chi.URLParam(r, "documentID"))
+	var req struct {
+		PageIDs []string `json:"page_ids"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	start, err := s.app.StartRecognition(r.Context(), chi.URLParam(r, "documentID"), req.PageIDs)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -399,6 +421,37 @@ func (s *Server) getRecognitionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func (s *Server) listRunPages(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	if _, err := s.app.Store.GetRecognitionRun(r.Context(), runID); err != nil {
+		writeError(w, err)
+		return
+	}
+	pages, err := s.app.Store.ListRunPages(r.Context(), runID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pages)
+}
+
+func (s *Server) retryRun(w http.ResponseWriter, r *http.Request) {
+	start, err := s.app.RetryRun(r.Context(), chi.URLParam(r, "runID"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, start)
+}
+
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.CancelRun(r.Context(), chi.URLParam(r, "runID")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "canceling"})
 }
 
 func (s *Server) listRecognitionResults(w http.ResponseWriter, r *http.Request) {
@@ -610,7 +663,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.Store.MarkJobCanceled(r.Context(), chi.URLParam(r, "jobID")); err != nil {
+	if err := s.app.CancelJob(r.Context(), chi.URLParam(r, "jobID")); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -742,24 +795,25 @@ func normalizedUpdateChannel(channel string) string {
 	return channel
 }
 
-func firstUploadedFile(form *multipart.Form) (multipart.File, *multipart.FileHeader, error) {
+// uploadedFiles collects every uploaded file, preferring the "files"/"file"
+// fields, preserving the order within each field.
+func uploadedFiles(form *multipart.Form) ([]*multipart.FileHeader, error) {
 	if form == nil {
-		return nil, nil, errors.New("missing multipart form")
+		return nil, errors.New("missing multipart form")
 	}
-	for _, key := range []string{"file", "files"} {
-		files := form.File[key]
-		if len(files) > 0 {
-			f, err := files[0].Open()
-			return f, files[0], err
+	var headers []*multipart.FileHeader
+	for _, key := range []string{"files", "file"} {
+		headers = append(headers, form.File[key]...)
+	}
+	if len(headers) == 0 {
+		for _, fieldFiles := range form.File {
+			headers = append(headers, fieldFiles...)
 		}
 	}
-	for _, files := range form.File {
-		if len(files) > 0 {
-			f, err := files[0].Open()
-			return f, files[0], err
-		}
+	if len(headers) == 0 {
+		return nil, errors.New("upload field \"files\" is required")
 	}
-	return nil, nil, errors.New("upload field \"file\" is required")
+	return headers, nil
 }
 
 func addPageURLs(page *app.PageDetail) {
@@ -777,9 +831,12 @@ func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	if errors.Is(err, sql.ErrNoRows) {
 		status = http.StatusNotFound
+	} else if errors.Is(err, app.ErrRecognitionActive) {
+		status = http.StatusConflict
 	} else {
 		message := strings.ToLower(err.Error())
-		if strings.Contains(message, "unsupported") || strings.Contains(message, "required") || strings.Contains(message, "parse") {
+		if strings.Contains(message, "unsupported") || strings.Contains(message, "required") || strings.Contains(message, "parse") ||
+			strings.Contains(message, "nothing to retry") || strings.Contains(message, "not active") || strings.Contains(message, "still active") {
 			status = http.StatusBadRequest
 		}
 	}

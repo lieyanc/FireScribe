@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -382,15 +381,18 @@ func (s *Store) UpdatePageStatus(ctx context.Context, pageID, status string) err
 
 func (s *Store) CreateRecognitionRun(ctx context.Context, run RecognitionRun) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO recognition_runs(id, document_id, provider, model, prompt_version, config_json, status, started_at, finished_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)
-	`, run.ID, run.DocumentID, run.Provider, run.Model, run.PromptVersion, run.ConfigJSON, run.Status, run.StartedAt, run.FinishedAt, run.CreatedAt)
+		INSERT INTO recognition_runs(id, document_id, provider, model, prompt_version, config_json, status,
+			total_pages, done_pages, failed_pages, error, started_at, finished_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)
+	`, run.ID, run.DocumentID, run.Provider, run.Model, run.PromptVersion, run.ConfigJSON, run.Status,
+		run.TotalPages, run.DonePages, run.FailedPages, run.Error, run.StartedAt, run.FinishedAt, run.CreatedAt)
 	return err
 }
 
 func (s *Store) ListRecognitionRuns(ctx context.Context, documentID string) ([]RecognitionRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, document_id, provider, model, prompt_version, config_json, status, started_at, finished_at, created_at
+		SELECT id, document_id, provider, model, prompt_version, config_json, status,
+		       total_pages, done_pages, failed_pages, error, started_at, finished_at, created_at
 		FROM recognition_runs WHERE document_id = ? ORDER BY created_at DESC
 	`, documentID)
 	if err != nil {
@@ -411,10 +413,30 @@ func (s *Store) ListRecognitionRuns(ctx context.Context, documentID string) ([]R
 
 func (s *Store) GetRecognitionRun(ctx context.Context, id string) (RecognitionRun, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, document_id, provider, model, prompt_version, config_json, status, started_at, finished_at, created_at
+		SELECT id, document_id, provider, model, prompt_version, config_json, status,
+		       total_pages, done_pages, failed_pages, error, started_at, finished_at, created_at
 		FROM recognition_runs WHERE id = ?
 	`, id)
 	return scanRecognitionRun(row)
+}
+
+// ActiveRecognitionRun returns the queued/running run for a document, if any.
+func (s *Store) ActiveRecognitionRun(ctx context.Context, documentID string) (RecognitionRun, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, document_id, provider, model, prompt_version, config_json, status,
+		       total_pages, done_pages, failed_pages, error, started_at, finished_at, created_at
+		FROM recognition_runs
+		WHERE document_id = ? AND status IN ('queued', 'running')
+		ORDER BY created_at DESC LIMIT 1
+	`, documentID)
+	run, err := scanRecognitionRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RecognitionRun{}, false, nil
+	}
+	if err != nil {
+		return RecognitionRun{}, false, err
+	}
+	return run, true, nil
 }
 
 func (s *Store) UpdateRecognitionRunStatus(ctx context.Context, id, status, startedAt, finishedAt string) error {
@@ -424,6 +446,162 @@ func (s *Store) UpdateRecognitionRunStatus(ctx context.Context, id, status, star
 		WHERE id = ?
 	`, status, startedAt, finishedAt, id)
 	return err
+}
+
+// FinishRecognitionRun records the terminal state of a run.
+func (s *Store) FinishRecognitionRun(ctx context.Context, id, status, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE recognition_runs
+		SET status = ?, error = ?, finished_at = COALESCE(NULLIF(finished_at, ''), ?)
+		WHERE id = ?
+	`, status, errMsg, now(), id)
+	return err
+}
+
+func (s *Store) CreateRunPages(ctx context.Context, runID string, pages []Page) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, page := range pages {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO run_pages(run_id, page_id, page_no, status) VALUES (?, ?, ?, 'pending')
+		`, runID, page.ID, page.PageNo); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListRunPages(ctx context.Context, runID string) ([]RunPage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_id, page_id, page_no, status, attempts, error, started_at, finished_at
+		FROM run_pages WHERE run_id = ? ORDER BY page_no
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pages := []RunPage{}
+	for rows.Next() {
+		var page RunPage
+		var startedAt, finishedAt sql.NullString
+		if err := rows.Scan(&page.RunID, &page.PageID, &page.PageNo, &page.Status, &page.Attempts, &page.Error, &startedAt, &finishedAt); err != nil {
+			return nil, err
+		}
+		page.StartedAt = nullString(startedAt)
+		page.FinishedAt = nullString(finishedAt)
+		pages = append(pages, page)
+	}
+	return pages, rows.Err()
+}
+
+func (s *Store) MarkRunPageRunning(ctx context.Context, runID, pageID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE run_pages
+		SET status = 'running', attempts = attempts + 1, started_at = ?
+		WHERE run_id = ? AND page_id = ?
+	`, now(), runID, pageID)
+	return err
+}
+
+// MarkRunPageFinished stores a page's terminal status and folds it into the
+// run's progress counters so polling clients see incremental progress.
+func (s *Store) MarkRunPageFinished(ctx context.Context, runID, pageID, status, errMsg string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE run_pages SET status = ?, error = ?, finished_at = ? WHERE run_id = ? AND page_id = ?
+	`, status, errMsg, now(), runID, pageID); err != nil {
+		return err
+	}
+	failed := 0
+	if status == "failed" {
+		failed = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE recognition_runs SET done_pages = done_pages + 1, failed_pages = failed_pages + ? WHERE id = ?
+	`, failed, runID)
+	return err
+}
+
+// CancelPendingRunPages marks every unfinished page of a run as canceled and
+// returns how many pages were affected.
+func (s *Store) CancelPendingRunPages(ctx context.Context, runID, message string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE run_pages SET status = 'canceled', error = ?, finished_at = ?
+		WHERE run_id = ? AND status IN ('pending', 'running')
+	`, message, now(), runID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) RunPageStatusCounts(ctx context.Context, runID string) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT status, COUNT(*) FROM run_pages WHERE run_id = ? GROUP BY status
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
+}
+
+// RecomputeDocumentStatus derives a document's status from its pages and text
+// versions. It never touches documents that are importing or failed imports.
+func (s *Store) RecomputeDocumentStatus(ctx context.Context, documentID string) error {
+	doc, err := s.GetDocument(ctx, documentID)
+	if err != nil {
+		return err
+	}
+	switch doc.Status {
+	case "importing", "failed":
+		return nil
+	}
+
+	var totalPages int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pages WHERE document_id = ?`, documentID).Scan(&totalPages); err != nil {
+		return err
+	}
+	status := "ready"
+	if totalPages > 0 {
+		var finalizedPages int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM pages p
+			WHERE p.document_id = ?
+			  AND (p.status = 'verified' OR EXISTS(SELECT 1 FROM text_versions v WHERE v.page_id = p.id AND v.kind = 'final'))
+		`, documentID).Scan(&finalizedPages); err != nil {
+			return err
+		}
+		var hasText int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM text_versions WHERE document_id = ? AND page_id IS NOT NULL)
+		`, documentID).Scan(&hasText); err != nil {
+			return err
+		}
+		switch {
+		case finalizedPages == totalPages:
+			status = "finalized"
+		case hasText != 0:
+			status = "reviewing"
+		}
+	}
+	if status == doc.Status {
+		return nil
+	}
+	return s.UpdateDocumentStatus(ctx, documentID, status)
 }
 
 func (s *Store) CreateRecognitionResult(ctx context.Context, result RecognitionResult) error {
@@ -631,24 +809,79 @@ func (s *Store) MarkJobCanceled(ctx context.Context, id string) error {
 	return err
 }
 
-// FailInterruptedJobs marks jobs left in queued/running state by a previous
-// process (crash or update restart) as failed so they become retryable, and
-// fails the recognition runs they were driving.
-func (s *Store) FailInterruptedJobs(ctx context.Context) (int64, error) {
+// CancelJobsForTarget cancels the queued/running jobs driving a target (e.g.
+// a recognition run) when the run is finalized without its worker.
+func (s *Store) CancelJobsForTarget(ctx context.Context, targetID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = 'canceled', finished_at = ? WHERE target_id = ? AND status IN ('queued', 'running')`, now(), targetID)
+	return err
+}
+
+// RecoverInterrupted cleans up state left behind by a previous process (crash
+// or update restart): unfinished run pages, runs, and jobs become failed (so
+// their pages are retryable), and documents stuck in transient statuses are
+// recomputed from their data.
+func (s *Store) RecoverInterrupted(ctx context.Context) (int64, error) {
+	const cause = "interrupted by server restart"
+	timestamp := now()
+
 	if _, err := s.db.ExecContext(ctx, `
-		UPDATE recognition_runs SET status = 'failed', finished_at = ?
+		UPDATE run_pages SET status = 'failed', error = ?, finished_at = ?
+		WHERE status IN ('pending', 'running')
+		  AND run_id IN (SELECT id FROM recognition_runs WHERE status IN ('queued', 'running'))
+	`, cause, timestamp); err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE recognition_runs
+		SET status = 'failed', error = ?, finished_at = ?,
+		    done_pages = (SELECT COUNT(*) FROM run_pages rp WHERE rp.run_id = recognition_runs.id AND rp.status NOT IN ('pending', 'running')),
+		    failed_pages = (SELECT COUNT(*) FROM run_pages rp WHERE rp.run_id = recognition_runs.id AND rp.status = 'failed')
 		WHERE status IN ('queued', 'running')
-	`, now()); err != nil {
+	`, cause, timestamp); err != nil {
 		return 0, err
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE jobs SET status = 'failed', finished_at = ?, last_error = 'interrupted by server restart'
+		UPDATE jobs SET status = 'failed', finished_at = ?, last_error = ?
 		WHERE status IN ('queued', 'running')
-	`, now())
+	`, timestamp, cause)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	recovered, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE documents SET status = 'failed', updated_at = ? WHERE status = 'importing'
+	`, timestamp); err != nil {
+		return recovered, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM documents WHERE status = 'recognizing'`)
+	if err != nil {
+		return recovered, err
+	}
+	defer rows.Close()
+	var stuck []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return recovered, err
+		}
+		stuck = append(stuck, id)
+	}
+	if err := rows.Err(); err != nil {
+		return recovered, err
+	}
+	for _, id := range stuck {
+		if _, err := s.db.ExecContext(ctx, `UPDATE documents SET status = 'ready', updated_at = ? WHERE id = ?`, timestamp, id); err != nil {
+			return recovered, err
+		}
+		if err := s.RecomputeDocumentStatus(ctx, id); err != nil {
+			return recovered, err
+		}
+	}
+	return recovered, nil
 }
 
 func (s *Store) HasActiveJobs(ctx context.Context) (bool, error) {
@@ -780,7 +1013,8 @@ func scanPageDetail(scanner interface{ Scan(...any) error }) (PageDetail, error)
 func scanRecognitionRun(scanner interface{ Scan(...any) error }) (RecognitionRun, error) {
 	var run RecognitionRun
 	var startedAt, finishedAt sql.NullString
-	err := scanner.Scan(&run.ID, &run.DocumentID, &run.Provider, &run.Model, &run.PromptVersion, &run.ConfigJSON, &run.Status, &startedAt, &finishedAt, &run.CreatedAt)
+	err := scanner.Scan(&run.ID, &run.DocumentID, &run.Provider, &run.Model, &run.PromptVersion, &run.ConfigJSON, &run.Status,
+		&run.TotalPages, &run.DonePages, &run.FailedPages, &run.Error, &startedAt, &finishedAt, &run.CreatedAt)
 	run.StartedAt = nullString(startedAt)
 	run.FinishedAt = nullString(finishedAt)
 	return run, err
@@ -853,12 +1087,6 @@ func quoteFTS(query string) string {
 
 func runeLen(value string) int {
 	return len([]rune(value))
-}
-
-func decodeJobPayload(payload string) map[string]string {
-	values := map[string]string{}
-	_ = json.Unmarshal([]byte(payload), &values)
-	return values
 }
 
 func (s *Store) attachDocumentTags(ctx context.Context, docs []Document) ([]Document, error) {

@@ -86,9 +86,24 @@ type RecognitionRun struct {
 	PromptVersion string `json:"prompt_version"`
 	ConfigJSON    string `json:"config_json"`
 	Status        string `json:"status"`
+	TotalPages    int    `json:"total_pages"`
+	DonePages     int    `json:"done_pages"`
+	FailedPages   int    `json:"failed_pages"`
+	Error         string `json:"error"`
 	StartedAt     string `json:"started_at"`
 	FinishedAt    string `json:"finished_at"`
 	CreatedAt     string `json:"created_at"`
+}
+
+type RunPage struct {
+	RunID      string `json:"run_id"`
+	PageID     string `json:"page_id"`
+	PageNo     int    `json:"page_no"`
+	Status     string `json:"status"`
+	Attempts   int    `json:"attempts"`
+	Error      string `json:"error"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
 }
 
 type RecognitionResult struct {
