@@ -21,6 +21,7 @@ import { EmptyState, ErrorMessage, IconTooltipButton, LabeledValue, MetricCard, 
 import { StatusBadge } from "../components/app/status-badge";
 import { PageProcessingCard } from "../components/app/page-processing-card";
 import { RecognitionExperimentsCard } from "../components/app/recognition-experiments-card";
+import { CrossCheckCard } from "../components/app/cross-check-card";
 import { ExportHistoryCard } from "../components/app/export-history-card";
 import { TagChips, TagEditor } from "../components/app/tags";
 import {
@@ -786,6 +787,8 @@ export function DocumentDetailPage() {
       <PageProcessingCard documentID={documentID} pages={pageItems} />
 
       <RecognitionExperimentsCard documentID={documentID} pages={pageItems} />
+
+      <CrossCheckCard documentID={documentID} pages={pageItems} />
 
       <ExportHistoryCard scope="document" targetID={documentID} />
 

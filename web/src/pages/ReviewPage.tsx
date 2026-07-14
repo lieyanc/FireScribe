@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { EmptyState, IconTooltipButton, LabeledValue, PageHeader, PendingButton } from "../components/app/chrome";
 import { StatusBadge } from "../components/app/status-badge";
+import { CrossCheckReviewPanel } from "../components/app/cross-check-card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +49,7 @@ import {
   getCandidateMerge,
   getDocument,
   getPage,
+  getPageCrossCheck,
   listAnnotations,
   listPages,
   listRecognitionResults,
@@ -116,6 +118,15 @@ export function ReviewPage() {
     enabled: !!documentID && !!currentPageID,
   });
   const recognizerProfiles = useQuery({ queryKey: ["recognizer-profiles"], queryFn: listRecognizerProfiles });
+  // 该页没有核验记录时后端返回 404,静默不展示面板;核验仍在进行时轮询等结果。
+  const pageCrossCheck = useQuery({
+    queryKey: ["page-cross-check", currentPageID],
+    queryFn: () => getPageCrossCheck(currentPageID),
+    enabled: !!currentPageID,
+    retry: false,
+    refetchInterval: (query) =>
+      ["queued", "running"].includes(query.state.data?.cross_check.status ?? "") ? 1500 : false,
+  });
 
   const orderedPages = pages.data ?? [];
   const pageIndex = orderedPages.findIndex((item) => item.page_id === currentPageID);
@@ -855,7 +866,10 @@ export function ReviewPage() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="diff">
+            <TabsContent value="diff" className="flex flex-col gap-2">
+              {pageCrossCheck.data && ["consensus", "disagreement", "failed"].includes(pageCrossCheck.data.page.status) ? (
+                <CrossCheckReviewPanel crossCheck={pageCrossCheck.data.cross_check} page={pageCrossCheck.data.page} />
+              ) : null}
               {results.data && results.data.length > 1 ? (
                 <DiffView
                   results={results.data}

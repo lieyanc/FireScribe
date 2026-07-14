@@ -226,6 +226,85 @@ export type RecognitionExperimentInput = {
   }>;
 };
 
+export type CrossCheckConflict = {
+  text: string;
+  kind: "omitted" | "partial" | "divergent";
+  present_in: string[];
+  absent_from?: string[];
+};
+
+export type CrossCheckVariant = {
+  id: string;
+  cross_check_id: string;
+  name: string;
+  recognizer_profile_id?: string;
+  provider_adapter_id?: string;
+  prompt_version_id?: string;
+  image_source: "original" | "enhanced";
+  position: number;
+  status: string;
+  run_id?: string;
+  error: string;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+};
+
+export type CrossCheckPage = {
+  cross_check_id: string;
+  page_id: string;
+  page_no: number;
+  status: "pending" | "consensus" | "disagreement" | "failed" | "canceled";
+  agreement: number | null;
+  result_ids: string[];
+  consensus_version_id?: string;
+  merged_version_id?: string;
+  annotation_id?: string;
+  conflicts: CrossCheckConflict[];
+  adopted_version_id?: string;
+  adopted_at?: string;
+  error: string;
+  effective_kind?: "manual" | "final" | "candidate" | "raw_selected" | "";
+};
+
+export type CrossCheck = {
+  id: string;
+  document_id: string;
+  job_id: string;
+  name: string;
+  page_ids: string[];
+  merge_profile_id?: string;
+  status: "queued" | "running" | "succeeded" | "partial" | "failed" | "canceled";
+  error: string;
+  consensus_pages: number;
+  disagreement_pages: number;
+  failed_pages: number;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+  variants: CrossCheckVariant[];
+  pages?: CrossCheckPage[];
+};
+
+export type CrossCheckInput = {
+  name?: string;
+  page_ids?: string[];
+  merge_profile_id?: string;
+  variants: Array<{
+    name?: string;
+    recognizer_profile_id?: string;
+    provider_adapter_id?: string;
+    prompt_version_id?: string;
+    image_source?: "original" | "enhanced";
+  }>;
+};
+
+export type CrossCheckAdoption = {
+  adopted_page_ids: string[];
+  skipped: Array<{ page_id: string; page_no: number; reason: string }>;
+  cross_check: CrossCheck;
+};
+
 export type RunPage = {
   run_id: string;
   page_id: string;
@@ -1035,6 +1114,34 @@ export function selectRecognitionExperimentWinner(id: string, variantID: string)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ variant_id: variantID }),
   });
+}
+
+export function startCrossCheck(documentID: string, input: CrossCheckInput) {
+  return apiFetch<{ cross_check: CrossCheck; job: Job }>(`/api/documents/${documentID}/cross-checks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listCrossChecks(documentID: string) {
+  return apiFetch<CrossCheck[]>(`/api/documents/${documentID}/cross-checks`);
+}
+
+export function getCrossCheck(checkID: string) {
+  return apiFetch<CrossCheck>(`/api/cross-checks/${checkID}`);
+}
+
+export function adoptCrossCheck(checkID: string, pageIDs?: string[]) {
+  return apiFetch<CrossCheckAdoption>(`/api/cross-checks/${checkID}/adopt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page_ids: pageIDs ?? [] }),
+  });
+}
+
+export function getPageCrossCheck(pageID: string) {
+  return apiFetch<{ cross_check: CrossCheck; page: CrossCheckPage }>(`/api/pages/${pageID}/cross-check`);
 }
 
 export function listRecognitionRuns(documentID: string) {
