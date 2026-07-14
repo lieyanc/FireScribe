@@ -468,6 +468,21 @@ func TestCheckOnlyGitHubDirectRejectsBadSignature(t *testing.T) {
 	}
 }
 
+func TestWaitForIdleStopsWhenApplicationContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	u := New(
+		func() Config { return Config{} },
+		func() string { return "" },
+		log.New(io.Discard, "", 0),
+		RestartHooks{IsBusy: func() bool { return true }},
+	)
+
+	if err := u.waitForIdle(ctx); err != context.Canceled {
+		t.Fatalf("waitForIdle error = %v, want context.Canceled", err)
+	}
+}
+
 func setTestSigningKey(t *testing.T) func(data []byte) string {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

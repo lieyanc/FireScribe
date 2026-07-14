@@ -182,7 +182,10 @@ func (u *Updater) ApplyPending(_ context.Context) error {
 
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		u.waitForIdle(u.bgContext())
+		if err := u.waitForIdle(u.bgContext()); err != nil {
+			u.setError("apply canceled while waiting for idle: " + err.Error())
+			return
+		}
 		if err := u.applyUpdate(path, tag); err != nil {
 			u.notifyExecFailure(err)
 			u.setError("apply failed: " + err.Error())
@@ -307,7 +310,10 @@ func (u *Updater) performUpdate(ctx context.Context) {
 		u.status.Progress = progressApplying
 		u.status.DownloadProgress = 0
 		u.mu.Unlock()
-		u.waitForIdle(ctx)
+		if err := u.waitForIdle(ctx); err != nil {
+			u.setError("apply canceled while waiting for idle: " + err.Error())
+			return
+		}
 		if err := u.applyUpdate(binaryPath, release.TagName); err != nil {
 			u.notifyExecFailure(err)
 			u.setError("apply failed: " + err.Error())
@@ -357,11 +363,12 @@ func (u *Updater) notifyExecFailure(err error) {
 	u.hooks.OnExecFailure(err)
 }
 
-// waitForIdle blocks until the application reports no in-flight work, the
-// context is canceled, or idleWaitTimeout elapses (then proceeds anyway).
-func (u *Updater) waitForIdle(ctx context.Context) {
+// waitForIdle blocks until the application reports no in-flight work. A
+// canceled application context aborts the update; only the deliberate idle
+// timeout permits applying while work is still reported as active.
+func (u *Updater) waitForIdle(ctx context.Context) error {
 	if u.hooks.IsBusy == nil || !u.hooks.IsBusy() {
-		return
+		return nil
 	}
 	u.logger.Printf("update: waiting for in-flight jobs to finish before applying (max %s)", idleWaitTimeout)
 	deadline := time.After(idleWaitTimeout)
@@ -370,13 +377,13 @@ func (u *Updater) waitForIdle(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-deadline:
 			u.logger.Printf("update: idle wait timed out, applying anyway")
-			return
+			return nil
 		case <-ticker.C:
 			if !u.hooks.IsBusy() {
-				return
+				return nil
 			}
 		}
 	}
