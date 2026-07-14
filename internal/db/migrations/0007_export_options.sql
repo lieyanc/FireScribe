@@ -1,0 +1,3 @@
+ALTER TABLE exports ADD COLUMN text_scope TEXT NOT NULL DEFAULT 'current';
+ALTER TABLE exports ADD COLUMN include_annotations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE exports ADD COLUMN include_uncertain INTEGER NOT NULL DEFAULT 0;
