@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"mime/multipart"
@@ -17,6 +18,7 @@ import (
 	urlpath "path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,6 +37,7 @@ type Server struct {
 	runtime   *config.Runtime
 	updater   *updater.Updater
 	updateCfg updater.Config
+	promptMu  sync.Mutex
 }
 
 type UpdateRuntime struct {
@@ -68,40 +71,100 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/update/apply", s.requireUpdateToken(s.updateApply))
 		r.Post("/update/dismiss", s.requireUpdateToken(s.updateDismiss))
 		r.Get("/documents", s.listDocuments)
+		r.Get("/recognizer-drivers", s.listRecognizerDrivers)
+		r.Get("/recognizer-profiles", s.listRecognizerProfiles)
+		r.Post("/recognizer-profiles", s.requireUpdateToken(s.createRecognizerProfile))
+		r.Put("/recognizer-profiles/{profileID}", s.requireUpdateToken(s.updateRecognizerProfile))
+		r.Delete("/recognizer-profiles/{profileID}", s.requireUpdateToken(s.deleteRecognizerProfile))
+		r.Get("/provider-adapters", s.listProviderAdapters)
+		r.Post("/provider-adapters", s.requireUpdateToken(s.createProviderAdapter))
+		r.Put("/provider-adapters/{adapterID}", s.requireUpdateToken(s.updateProviderAdapter))
+		r.Delete("/provider-adapters/{adapterID}", s.requireUpdateToken(s.deleteProviderAdapter))
+		r.Get("/author-profiles", s.listAuthorProfiles)
+		r.Post("/author-profiles", s.createAuthorProfile)
+		r.Get("/author-profiles/{profileID}", s.getAuthorProfile)
+		r.Patch("/author-profiles/{profileID}", s.patchAuthorProfile)
+		r.Delete("/author-profiles/{profileID}", s.deleteAuthorProfile)
+		r.Get("/author-profiles/{profileID}/terms", s.listAuthorTerms)
+		r.Post("/author-profiles/{profileID}/terms", s.createAuthorTerm)
+		r.Get("/author-profiles/{profileID}/documents", s.listAuthorProfileDocuments)
+		r.Get("/author-profiles/{profileID}/corrections", s.listAuthorCorrections)
+		r.Get("/author-profiles/{profileID}/metrics", s.getAuthorRecognitionMetrics)
+		r.Post("/author-profiles/{profileID}/corrections/sync", s.syncAuthorCorrections)
+		r.Get("/author-profiles/{profileID}/training-data", s.downloadAuthorTrainingData)
+		r.Patch("/author-terms/{termID}", s.patchAuthorTerm)
+		r.Delete("/author-terms/{termID}", s.deleteAuthorTerm)
+		r.Get("/projects", s.listProjects)
+		r.Post("/projects", s.createProject)
+		r.Get("/projects/{projectID}", s.getProject)
+		r.Patch("/projects/{projectID}", s.patchProject)
+		r.Delete("/projects/{projectID}", s.deleteProject)
+		r.Get("/projects/{projectID}/documents", s.listProjectDocuments)
+		r.Post("/projects/{projectID}/documents", s.addProjectDocument)
+		r.Delete("/projects/{projectID}/documents/{documentID}", s.removeProjectDocument)
+		r.Put("/projects/{projectID}/documents/order", s.reorderProjectDocuments)
+		r.Post("/projects/{projectID}/exports", s.exportProject)
+		r.Get("/projects/{projectID}/exports", s.listProjectExports)
 		r.Post("/documents/import", s.importDocument)
 		r.Get("/documents/{documentID}", s.getDocument)
 		r.Patch("/documents/{documentID}", s.patchDocument)
 		r.Delete("/documents/{documentID}", s.deleteDocument)
 		r.Get("/documents/{documentID}/assets", s.listDocumentAssets)
+		r.Get("/documents/{documentID}/author-profile", s.getDocumentAuthorProfile)
+		r.Put("/documents/{documentID}/author-profile", s.setDocumentAuthorProfile)
 		r.Put("/documents/{documentID}/tags", s.setDocumentTags)
 		r.Get("/documents/{documentID}/pages", s.listPages)
+		r.Post("/documents/{documentID}/page-processing-runs", s.startPageProcessing)
+		r.Get("/documents/{documentID}/page-processing-runs", s.listPageProcessingRuns)
 		r.Post("/documents/{documentID}/recognition-runs", s.startRecognition)
 		r.Get("/documents/{documentID}/recognition-runs", s.listRecognitionRuns)
+		r.Post("/documents/{documentID}/recognition-experiments", s.createRecognitionExperiment)
+		r.Get("/documents/{documentID}/recognition-experiments", s.listRecognitionExperiments)
 		r.Get("/documents/{documentID}/final-text", s.finalText)
 		r.Post("/documents/{documentID}/exports", s.exportDocument)
+		r.Get("/documents/{documentID}/exports", s.listDocumentExports)
 		r.Get("/documents/{documentID}/annotations", s.listAnnotations)
 		r.Post("/documents/{documentID}/annotations", s.createAnnotation)
 
 		r.Get("/pages/{pageID}", s.getPage)
 		r.Get("/pages/{pageID}/image", s.pageImage)
 		r.Get("/pages/{pageID}/thumbnail", s.pageThumbnail)
+		r.Get("/pages/{pageID}/processing-preview", s.pageProcessingPreview)
 		r.Get("/pages/{pageID}/recognition-results", s.listRecognitionResults)
+		r.Post("/pages/{pageID}/candidate-merges", s.mergeRecognitionCandidates)
 		r.Get("/pages/{pageID}/text-versions", s.listTextVersions)
 		r.Post("/pages/{pageID}/text-versions", s.createTextVersion)
+		r.Post("/pages/{pageID}/review-activity", s.recordReviewActivity)
+		r.Get("/text-versions/{textVersionID}/candidate-merge", s.getCandidateMerge)
 
 		r.Get("/recognition-runs/{runID}", s.getRecognitionRun)
 		r.Get("/recognition-runs/{runID}/pages", s.listRunPages)
 		r.Post("/recognition-runs/{runID}/retry", s.retryRun)
 		r.Post("/recognition-runs/{runID}/cancel", s.cancelRun)
+		r.Get("/recognition-experiments/{experimentID}", s.getRecognitionExperiment)
+		r.Post("/recognition-experiments/{experimentID}/winner", s.selectRecognitionExperimentWinner)
+		r.Get("/page-processing-runs/{runID}", s.getPageProcessingRun)
+		r.Get("/page-processing-runs/{runID}/results", s.listPageProcessingResults)
 		r.Get("/settings", s.getSettings)
 		r.Put("/settings", s.requireUpdateToken(s.putSettings))
+		r.Get("/prompts", s.listPromptVersions)
+		r.Post("/prompts", s.requireUpdateToken(s.createPromptVersion))
+		r.Post("/prompts/{promptID}/activate", s.requireUpdateToken(s.activatePromptVersion))
 		r.Get("/search", s.search)
+		r.Get("/review-queue", s.reviewQueue)
+		r.Get("/evaluation", s.evaluationMetrics)
+		r.Post("/search/rebuild", s.rebuildSearchIndex)
 		r.Get("/tags", s.listTags)
 		r.Get("/assets/{assetID}/download", s.downloadAsset)
 		r.Get("/exports/{exportID}", s.getExport)
 		r.Get("/exports/{exportID}/download", s.downloadExport)
+		r.Get("/exports/{exportID}/snapshot", s.exportSnapshot)
+		r.Get("/project-exports/{exportID}", s.getProjectExport)
+		r.Get("/project-exports/{exportID}/download", s.downloadProjectExport)
+		r.Get("/project-exports/{exportID}/snapshot", s.projectExportSnapshot)
 		r.Get("/jobs", s.listJobs)
 		r.Get("/jobs/{jobID}", s.getJob)
+		r.Get("/jobs/{jobID}/events", s.listJobEvents)
 		r.Post("/jobs/{jobID}/cancel", s.cancelJob)
 		r.Post("/jobs/{jobID}/retry", s.retryJob)
 		r.Patch("/annotations/{annotationID}", s.patchAnnotation)
@@ -268,7 +331,7 @@ func (s *Server) importDocument(w http.ResponseWriter, r *http.Request) {
 		files = append(files, app.ImportFile{Name: header.Filename, Reader: f})
 	}
 
-	doc, err := s.app.ImportDocument(r.Context(), app.ImportOptions{
+	start, err := s.app.StartImport(r.Context(), app.ImportOptions{
 		Title:       r.FormValue("title"),
 		Description: r.FormValue("description"),
 		Author:      r.FormValue("author"),
@@ -278,7 +341,7 @@ func (s *Server) importDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, doc)
+	writeJSON(w, http.StatusAccepted, start)
 }
 
 func (s *Server) getDocument(w http.ResponseWriter, r *http.Request) {
@@ -392,12 +455,21 @@ func (s *Server) pageThumbnail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startRecognition(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PageIDs []string `json:"page_ids"`
+		PageIDs           []string `json:"page_ids"`
+		ProfileID         string   `json:"recognizer_profile_id"`
+		ProviderAdapterID string   `json:"provider_adapter_id"`
+		PromptVersionID   string   `json:"prompt_version_id"`
+		InputSource       string   `json:"image_source"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid recognition request: " + err.Error()})
+			return
+		}
 	}
-	start, err := s.app.StartRecognition(r.Context(), chi.URLParam(r, "documentID"), req.PageIDs)
+	start, err := s.app.StartRecognitionWithOptions(r.Context(), chi.URLParam(r, "documentID"), app.RecognitionOptions{
+		PageIDs: req.PageIDs, ProfileID: req.ProfileID, ProviderAdapterID: req.ProviderAdapterID, PromptVersionID: req.PromptVersionID, InputSource: req.InputSource,
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -547,6 +619,15 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
+func (s *Server) rebuildSearchIndex(w http.ResponseWriter, r *http.Request) {
+	job, err := s.app.StartRebuildSearchIndex(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
 func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := s.app.Store.ListTags(r.Context())
 	if err != nil {
@@ -560,16 +641,22 @@ func (s *Server) exportDocument(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Format             string `json:"format"`
 		IncludePageNumbers bool   `json:"include_page_numbers"`
+		TextScope          string `json:"text_scope"`
+		IncludeAnnotations bool   `json:"include_annotations"`
+		IncludeUncertain   bool   `json:"include_uncertain"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	exportFile, err := s.app.ExportDocument(r.Context(), chi.URLParam(r, "documentID"), req.Format, req.IncludePageNumbers)
+	start, err := s.app.StartExportWithOptions(r.Context(), chi.URLParam(r, "documentID"), app.ExportOptions{
+		Format: req.Format, IncludePageNumbers: req.IncludePageNumbers, TextScope: req.TextScope,
+		IncludeAnnotations: req.IncludeAnnotations, IncludeUncertain: req.IncludeUncertain,
+	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, exportFile)
+	writeJSON(w, http.StatusAccepted, start)
 }
 
 func (s *Server) listAnnotations(w http.ResponseWriter, r *http.Request) {
@@ -628,16 +715,40 @@ func (s *Server) patchAnnotation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getExport(w http.ResponseWriter, r *http.Request) {
-	asset, _, err := s.app.AssetPath(r.Context(), chi.URLParam(r, "exportID"))
+	exportID := chi.URLParam(r, "exportID")
+	export, err := s.app.Store.GetExport(r.Context(), exportID)
+	if errors.Is(err, sql.ErrNoRows) {
+		asset, _, assetErr := s.app.AssetPath(r.Context(), exportID)
+		if assetErr != nil {
+			writeError(w, assetErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, asset)
+		return
+	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, asset)
+	writeJSON(w, http.StatusOK, export)
 }
 
 func (s *Server) downloadExport(w http.ResponseWriter, r *http.Request) {
-	s.serveAsset(w, r, chi.URLParam(r, "exportID"), true)
+	exportID := chi.URLParam(r, "exportID")
+	export, err := s.app.Store.GetExport(r.Context(), exportID)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.serveAsset(w, r, exportID, true)
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if export.Status != "succeeded" || export.AssetID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "export is not ready"})
+		return
+	}
+	s.serveAsset(w, r, export.AssetID, true)
 }
 
 func (s *Server) downloadAsset(w http.ResponseWriter, r *http.Request) {
@@ -660,6 +771,15 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) listJobEvents(w http.ResponseWriter, r *http.Request) {
+	events, err := s.app.Store.ListJobEvents(r.Context(), chi.URLParam(r, "jobID"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
@@ -831,11 +951,16 @@ func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	if errors.Is(err, sql.ErrNoRows) {
 		status = http.StatusNotFound
-	} else if errors.Is(err, app.ErrRecognitionActive) {
+	} else if errors.Is(err, app.ErrRecognitionActive) || errors.Is(err, app.ErrPageProcessingActive) || errors.Is(err, app.ErrAuthorTermExists) {
 		status = http.StatusConflict
 	} else {
 		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "unique constraint") {
+			status = http.StatusConflict
+		}
 		if strings.Contains(message, "unsupported") || strings.Contains(message, "required") || strings.Contains(message, "parse") ||
+			strings.Contains(message, "must") || strings.Contains(message, "between") || strings.Contains(message, "does not belong") ||
+			strings.Contains(message, "duplicate") || strings.Contains(message, "mutually exclusive") || strings.Contains(message, "disabled") ||
 			strings.Contains(message, "nothing to retry") || strings.Contains(message, "not active") || strings.Contains(message, "still active") {
 			status = http.StatusBadRequest
 		}
