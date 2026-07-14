@@ -23,8 +23,20 @@ import (
 )
 
 type ExtractedPage struct {
-	Path string
-	Ext  string
+	Path           string
+	Ext            string
+	Method         string
+	FallbackReason string
+}
+
+const (
+	PDFPageMethodEmbedded   = "embedded_image"
+	PDFPageMethodRasterized = "rasterized"
+)
+
+type pdfImageRecord struct {
+	Page int
+	Num  int
 }
 
 // normalizedFormats are stored page-image formats that vision APIs accept
@@ -47,9 +59,293 @@ func SupportedImageExt(ext string) bool {
 	}
 }
 
-// RasterizePDF renders each PDF page to a JPEG via pdftoppm. Unlike image
-// extraction, rasterization keeps page numbering correct for text pages,
-// multi-image pages, and CCITT/JBIG2-encoded scans.
+// ExtractPDFPages preserves the original embedded image bytes when every PDF
+// page contains exactly one primary image. PDFs that do not match that shape,
+// or systems without pdfimages/pdfinfo, fall back to the compatible pdftoppm
+// renderer so text pages and more complex PDFs remain importable.
+func ExtractPDFPages(ctx context.Context, pdfPath string, dpi int) ([]ExtractedPage, error) {
+	pages, directErr := extractEmbeddedPDFImages(ctx, pdfPath)
+	if directErr == nil {
+		return pages, nil
+	}
+
+	pages, rasterErr := RasterizePDF(ctx, pdfPath, dpi)
+	if rasterErr != nil {
+		return nil, fmt.Errorf("extract embedded PDF images: %v; rasterize fallback: %w", directErr, rasterErr)
+	}
+	for i := range pages {
+		pages[i].FallbackReason = directErr.Error()
+	}
+	return pages, nil
+}
+
+// ProcessPDFPages extracts or renders one page at a time, reports Poppler
+// progress, and only starts consume after a complete extraction strategy has
+// succeeded. That preserves raster fallback without leaving partially
+// imported pages when direct embedded-image extraction fails halfway.
+func ProcessPDFPages(ctx context.Context, pdfPath string, dpi int, progress func(int, int, string), consume func(ExtractedPage) error) error {
+	pageCount, records, directErr := inspectEmbeddedPDFImages(ctx, pdfPath)
+	if directErr == nil {
+		tempDir, err := os.MkdirTemp("", "firescribe-pdfimages-pages-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tempDir)
+		pages := make([]ExtractedPage, 0, len(records))
+		for index, record := range records {
+			prefix := filepath.Join(tempDir, fmt.Sprintf("page-%06d", index+1))
+			cmd := exec.CommandContext(ctx, "pdfimages", "-f", strconv.Itoa(record.Page), "-l", strconv.Itoa(record.Page), "-all", pdfPath, prefix)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				directErr = fmt.Errorf("pdfimages page %d: %w: %s", record.Page, err, strings.TrimSpace(string(output)))
+				break
+			}
+			path, err := extractedImagePath(prefix, record.Num)
+			if err != nil {
+				// Some Poppler builds renumber outputs when -f/-l is used.
+				path, err = firstExtractedImagePath(prefix)
+			}
+			if err != nil {
+				directErr = fmt.Errorf("page %d embedded image: %w", record.Page, err)
+				break
+			}
+			ext := strings.ToLower(filepath.Ext(path))
+			if !normalizedFormats[ext] {
+				directErr = fmt.Errorf("page %d embedded image format %q is not directly displayable", record.Page, ext)
+				break
+			}
+			if _, _, err := ImageDimensions(path); err != nil {
+				directErr = fmt.Errorf("page %d embedded image is not decodable: %w", record.Page, err)
+				break
+			}
+			pages = append(pages, ExtractedPage{Path: path, Ext: ext, Method: PDFPageMethodEmbedded})
+			if progress != nil {
+				progress(index+1, len(records), fmt.Sprintf("已提取 PDF 第 %d/%d 页", index+1, len(records)))
+			}
+		}
+		if directErr == nil {
+			for _, page := range pages {
+				if err := consume(page); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+
+	if pageCount <= 0 {
+		pageCount, _ = pdfPageCount(ctx, pdfPath)
+	}
+	if pageCount <= 0 {
+		pages, err := RasterizePDF(ctx, pdfPath, dpi)
+		if err != nil {
+			return fmt.Errorf("extract embedded PDF images: %v; rasterize fallback: %w", directErr, err)
+		}
+		defer CleanupExtractedPages(pages)
+		for index, page := range pages {
+			page.FallbackReason = directErr.Error()
+			if progress != nil {
+				progress(index+1, len(pages), fmt.Sprintf("已光栅化 PDF 第 %d/%d 页", index+1, len(pages)))
+			}
+			if err := consume(page); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if dpi <= 0 {
+		dpi = 200
+	}
+	if _, err := exec.LookPath("pdftoppm"); err != nil {
+		return fmt.Errorf("pdftoppm is not installed (install poppler-utils to import PDF files): %w", err)
+	}
+	tempDir, err := os.MkdirTemp("", "firescribe-pdf-pages-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempDir)
+	pages := make([]ExtractedPage, 0, pageCount)
+	for pageNo := 1; pageNo <= pageCount; pageNo++ {
+		prefix := filepath.Join(tempDir, fmt.Sprintf("page-%06d", pageNo))
+		cmd := exec.CommandContext(ctx, "pdftoppm", "-f", strconv.Itoa(pageNo), "-l", strconv.Itoa(pageNo),
+			"-singlefile", "-jpeg", "-jpegopt", "quality=85", "-r", strconv.Itoa(dpi), pdfPath, prefix)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("pdftoppm page %d: %w: %s", pageNo, err, strings.TrimSpace(string(output)))
+		}
+		path := prefix + ".jpg"
+		if _, _, err := ImageDimensions(path); err != nil {
+			return fmt.Errorf("rendered page %d is not decodable: %w", pageNo, err)
+		}
+		pages = append(pages, ExtractedPage{Path: path, Ext: ".jpg", Method: PDFPageMethodRasterized, FallbackReason: directErr.Error()})
+		if progress != nil {
+			progress(pageNo, pageCount, fmt.Sprintf("已光栅化 PDF 第 %d/%d 页", pageNo, pageCount))
+		}
+	}
+	for _, page := range pages {
+		if err := consume(page); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PDFPageCount returns the number of pages before extraction so callers can
+// report page-level progress for a single large PDF.
+func PDFPageCount(ctx context.Context, pdfPath string) (int, error) {
+	return pdfPageCount(ctx, pdfPath)
+}
+
+// extractEmbeddedPDFImages uses Poppler's pdfimages -all mode, which copies
+// JPEG/JP2 streams without re-encoding and preserves the closest native file
+// representation for other image encodings.
+func extractEmbeddedPDFImages(ctx context.Context, pdfPath string) ([]ExtractedPage, error) {
+	_, records, err := inspectEmbeddedPDFImages(ctx, pdfPath)
+	if err != nil {
+		return nil, err
+	}
+
+	tempDir, err := os.MkdirTemp("", "firescribe-pdfimages-*")
+	if err != nil {
+		return nil, err
+	}
+	prefix := filepath.Join(tempDir, "image")
+	extractCmd := exec.CommandContext(ctx, "pdfimages", "-all", pdfPath, prefix)
+	extractOutput, err := extractCmd.CombinedOutput()
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return nil, fmt.Errorf("pdfimages -all: %w: %s", err, strings.TrimSpace(string(extractOutput)))
+	}
+
+	pages := make([]ExtractedPage, 0, len(records))
+	for _, record := range records {
+		path, err := extractedImagePath(prefix, record.Num)
+		if err != nil {
+			_ = os.RemoveAll(tempDir)
+			return nil, fmt.Errorf("page %d embedded image: %w", record.Page, err)
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if !normalizedFormats[ext] {
+			_ = os.RemoveAll(tempDir)
+			return nil, fmt.Errorf("page %d embedded image format %q is not directly displayable", record.Page, ext)
+		}
+		if _, _, err := ImageDimensions(path); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return nil, fmt.Errorf("page %d embedded image is not decodable: %w", record.Page, err)
+		}
+		pages = append(pages, ExtractedPage{Path: path, Ext: ext, Method: PDFPageMethodEmbedded})
+	}
+	return pages, nil
+}
+
+func inspectEmbeddedPDFImages(ctx context.Context, pdfPath string) (int, []pdfImageRecord, error) {
+	if _, err := exec.LookPath("pdfimages"); err != nil {
+		return 0, nil, fmt.Errorf("pdfimages is not installed: %w", err)
+	}
+	if _, err := exec.LookPath("pdfinfo"); err != nil {
+		return 0, nil, fmt.Errorf("pdfinfo is not installed: %w", err)
+	}
+
+	pageCount, err := pdfPageCount(ctx, pdfPath)
+	if err != nil {
+		return 0, nil, err
+	}
+	listCmd := exec.CommandContext(ctx, "pdfimages", "-list", pdfPath)
+	listOutput, err := listCmd.CombinedOutput()
+	if err != nil {
+		return pageCount, nil, fmt.Errorf("pdfimages -list: %w: %s", err, strings.TrimSpace(string(listOutput)))
+	}
+	records, err := parsePDFImageList(string(listOutput), pageCount)
+	if err != nil {
+		return pageCount, nil, err
+	}
+	return pageCount, records, nil
+}
+
+func pdfPageCount(ctx context.Context, pdfPath string) (int, error) {
+	cmd := exec.CommandContext(ctx, "pdfinfo", pdfPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("pdfinfo: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "Pages") {
+			continue
+		}
+		count, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || count <= 0 {
+			return 0, fmt.Errorf("pdfinfo returned invalid page count %q", strings.TrimSpace(value))
+		}
+		return count, nil
+	}
+	return 0, fmt.Errorf("pdfinfo output did not include a page count")
+}
+
+func parsePDFImageList(output string, pageCount int) ([]pdfImageRecord, error) {
+	byPage := make([][]pdfImageRecord, pageCount+1)
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[2] != "image" {
+			continue
+		}
+		page, pageErr := strconv.Atoi(fields[0])
+		num, numErr := strconv.Atoi(fields[1])
+		if pageErr != nil || numErr != nil || page < 1 || page > pageCount {
+			continue
+		}
+		byPage[page] = append(byPage[page], pdfImageRecord{Page: page, Num: num})
+	}
+
+	records := make([]pdfImageRecord, 0, pageCount)
+	for page := 1; page <= pageCount; page++ {
+		if len(byPage[page]) != 1 {
+			return nil, fmt.Errorf("page %d has %d extractable embedded images (want exactly 1)", page, len(byPage[page]))
+		}
+		records = append(records, byPage[page][0])
+	}
+	return records, nil
+}
+
+func extractedImagePath(prefix string, num int) (string, error) {
+	matches, err := filepath.Glob(fmt.Sprintf("%s-%03d.*", prefix, num))
+	if err != nil {
+		return "", err
+	}
+	for _, match := range matches {
+		ext := strings.ToLower(filepath.Ext(match))
+		if ext == ".params" || ext == ".jb2g" {
+			continue
+		}
+		info, err := os.Stat(match)
+		if err == nil && !info.IsDir() && info.Size() > 0 {
+			return match, nil
+		}
+	}
+	return "", fmt.Errorf("pdfimages did not produce image %03d", num)
+}
+
+func firstExtractedImagePath(prefix string) (string, error) {
+	matches, err := filepath.Glob(prefix + "-*.*")
+	if err != nil {
+		return "", err
+	}
+	for _, match := range matches {
+		ext := strings.ToLower(filepath.Ext(match))
+		if ext == ".params" || ext == ".jb2g" {
+			continue
+		}
+		info, err := os.Stat(match)
+		if err == nil && !info.IsDir() && info.Size() > 0 {
+			return match, nil
+		}
+	}
+	return "", fmt.Errorf("pdfimages did not produce a displayable image")
+}
+
+// RasterizePDF renders each PDF page to a JPEG via pdftoppm. It is the
+// compatibility fallback for text pages, multi-image pages, and PDFs whose
+// embedded image layout cannot be mapped one-to-one to pages.
 func RasterizePDF(ctx context.Context, pdfPath string, dpi int) ([]ExtractedPage, error) {
 	if dpi <= 0 {
 		dpi = 200
@@ -83,7 +379,7 @@ func RasterizePDF(ctx context.Context, pdfPath string, dpi int) ([]ExtractedPage
 	for _, match := range matches {
 		info, err := os.Stat(match)
 		if err == nil && !info.IsDir() && info.Size() > 0 {
-			pages = append(pages, ExtractedPage{Path: match, Ext: ".jpg"})
+			pages = append(pages, ExtractedPage{Path: match, Ext: ".jpg", Method: PDFPageMethodRasterized})
 		}
 	}
 	if len(pages) == 0 {

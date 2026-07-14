@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"os/exec"
@@ -74,7 +75,89 @@ func writeTestPDF(t *testing.T, path string, pages int) {
 	}
 }
 
-func TestRasterizePDFRendersEveryPageInOrder(t *testing.T) {
+func writeSingleJPEGImagePDF(t *testing.T, path string, jpegData []byte, width, height int) {
+	t.Helper()
+	content := fmt.Sprintf("q\n%d 0 0 %d 0 0 cm\n/Im0 Do\nQ\n", width, height)
+	objects := [][]byte{
+		[]byte("<< /Type /Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>", width, height)),
+		append([]byte(fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n", width, height, len(jpegData))), append(jpegData, []byte("\nendstream")...)...),
+		[]byte(fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content)),
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, object := range objects {
+		offsets[i] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n", i+1)
+		buf.Write(object)
+		buf.WriteString("\nendobj\n")
+	}
+	xrefStart := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n", len(objects)+1)
+	buf.WriteString("0000000000 65535 f \n")
+	for _, offset := range offsets {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", offset)
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xrefStart)
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testJPEG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 7), G: uint8(y * 11), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 91}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestExtractPDFPagesPreservesSingleEmbeddedJPEG(t *testing.T) {
+	for _, command := range []string{"pdfimages", "pdfinfo"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Skipf("%s not installed", command)
+		}
+	}
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "scan.pdf")
+	original := testJPEG(t, 24, 16)
+	writeSingleJPEGImagePDF(t, pdfPath, original, 24, 16)
+
+	pages, err := ExtractPDFPages(context.Background(), pdfPath, 100)
+	if err != nil {
+		t.Fatalf("ExtractPDFPages() error = %v", err)
+	}
+	defer CleanupExtractedPages(pages)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %d, want 1", len(pages))
+	}
+	page := pages[0]
+	if page.Method != PDFPageMethodEmbedded || page.FallbackReason != "" {
+		t.Fatalf("method = %q fallback = %q, want direct embedded extraction", page.Method, page.FallbackReason)
+	}
+	if page.Ext != ".jpg" {
+		t.Fatalf("ext = %q, want .jpg", page.Ext)
+	}
+	extracted, err := os.ReadFile(page.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(extracted, original) {
+		t.Fatal("pdfimages did not preserve the original embedded JPEG bytes")
+	}
+}
+
+func TestExtractPDFPagesFallsBackAndRendersEveryPageInOrder(t *testing.T) {
 	if _, err := exec.LookPath("pdftoppm"); err != nil {
 		t.Skip("pdftoppm not installed")
 	}
@@ -82,15 +165,21 @@ func TestRasterizePDFRendersEveryPageInOrder(t *testing.T) {
 	pdfPath := filepath.Join(dir, "doc.pdf")
 	writeTestPDF(t, pdfPath, 3)
 
-	pages, err := RasterizePDF(context.Background(), pdfPath, 100)
+	pages, err := ExtractPDFPages(context.Background(), pdfPath, 100)
 	if err != nil {
-		t.Fatalf("RasterizePDF() error = %v", err)
+		t.Fatalf("ExtractPDFPages() error = %v", err)
 	}
 	defer CleanupExtractedPages(pages)
 	if len(pages) != 3 {
 		t.Fatalf("pages = %d, want 3", len(pages))
 	}
 	for i, page := range pages {
+		if page.Method != PDFPageMethodRasterized {
+			t.Fatalf("page %d method = %q, want rasterized fallback", i, page.Method)
+		}
+		if page.FallbackReason == "" {
+			t.Fatalf("page %d did not explain why direct extraction fell back", i)
+		}
 		if page.Ext != ".jpg" {
 			t.Fatalf("page %d ext = %q", i, page.Ext)
 		}
@@ -104,6 +193,84 @@ func TestRasterizePDFRendersEveryPageInOrder(t *testing.T) {
 		if no, ok := trailingNumber(page.Path); !ok || no != i+1 {
 			t.Fatalf("page %d numeric suffix = %d (ok=%v)", i, no, ok)
 		}
+	}
+}
+
+func TestPDFPageCountSupportsImportProgressPreflight(t *testing.T) {
+	if _, err := exec.LookPath("pdfinfo"); err != nil {
+		t.Skip("pdfinfo not installed")
+	}
+	pdfPath := filepath.Join(t.TempDir(), "progress.pdf")
+	writeTestPDF(t, pdfPath, 7)
+	count, err := PDFPageCount(context.Background(), pdfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 7 {
+		t.Fatalf("page count = %d, want 7", count)
+	}
+}
+
+func TestProcessPDFPagesReportsEachRasterizedPageDuringWork(t *testing.T) {
+	for _, command := range []string{"pdfinfo", "pdfimages", "pdftoppm"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Skipf("%s not installed", command)
+		}
+	}
+	pdfPath := filepath.Join(t.TempDir(), "incremental.pdf")
+	writeTestPDF(t, pdfPath, 3)
+	seen := 0
+	progress := 0
+	if err := ProcessPDFPages(context.Background(), pdfPath, 100, func(current, total int, _ string) {
+		progress = current
+		if total != 3 {
+			t.Fatalf("progress total = %d", total)
+		}
+	}, func(page ExtractedPage) error {
+		seen++
+		if page.Method != PDFPageMethodRasterized || page.FallbackReason == "" {
+			t.Fatalf("page %d = %+v", seen, page)
+		}
+		if _, _, err := ImageDimensions(page.Path); err != nil {
+			t.Fatalf("page %d is unavailable during callback: %v", seen, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 3 {
+		t.Fatalf("callbacks = %d, want 3", seen)
+	}
+	if progress != 3 {
+		t.Fatalf("progress = %d, want 3", progress)
+	}
+}
+
+func TestProcessPDFPagesPreservesEmbeddedImageDuringCallback(t *testing.T) {
+	for _, command := range []string{"pdfinfo", "pdfimages"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Skipf("%s not installed", command)
+		}
+	}
+	original := testJPEG(t, 20, 12)
+	pdfPath := filepath.Join(t.TempDir(), "embedded-incremental.pdf")
+	writeSingleJPEGImagePDF(t, pdfPath, original, 20, 12)
+	seen := 0
+	if err := ProcessPDFPages(context.Background(), pdfPath, 100, nil, func(page ExtractedPage) error {
+		seen++
+		data, err := os.ReadFile(page.Path)
+		if err != nil {
+			return err
+		}
+		if page.Method != PDFPageMethodEmbedded || !bytes.Equal(data, original) {
+			t.Fatalf("embedded page = %+v bytes_equal=%v", page, bytes.Equal(data, original))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 1 {
+		t.Fatalf("callbacks = %d, want 1", seen)
 	}
 }
 
