@@ -1,33 +1,36 @@
-import { cn, statusLabel } from "../../lib/utils";
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
+import { cn } from "@/lib/utils";
 
-const tone: Record<string, string> = {
-  failed: "border-destructive/20 bg-destructive/10 text-destructive",
-  canceled: "border-destructive/20 bg-destructive/10 text-destructive",
-  checking: "border-primary/25 bg-primary/10 text-primary",
-  downloading: "border-primary/25 bg-primary/10 text-primary",
-  reviewing: "border-primary/25 bg-primary/10 text-primary",
-  ready: "border-primary/25 bg-primary/10 text-primary",
-  finalized: "border-primary/25 bg-primary/10 text-primary",
-  verified: "border-primary/25 bg-primary/10 text-primary",
-  succeeded: "border-primary/25 bg-primary/10 text-primary",
-  applying: "border-accent bg-accent text-accent-foreground",
-  recognizing: "border-accent bg-accent text-accent-foreground",
-  running: "border-accent bg-accent text-accent-foreground",
-  queued: "border-accent bg-accent text-accent-foreground",
-  open: "border-accent bg-accent text-accent-foreground",
-  resolved: "border-border bg-secondary text-secondary-foreground",
-};
+const badgeVariants = cva(
+  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg:not([class*='size-'])]:size-3",
+  {
+    variants: {
+      variant: {
+        default: "border-transparent bg-primary text-primary-foreground",
+        secondary: "border-transparent bg-secondary text-secondary-foreground",
+        destructive: "border-transparent bg-destructive text-destructive-foreground",
+        outline: "text-foreground",
+        success: "border-transparent bg-success text-success-foreground",
+        warning: "border-transparent bg-warning text-warning-foreground",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
 
-export function Badge({ value, className }: { value: string; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-6 items-center rounded-md border px-2.5 text-xs font-semibold transition-colors",
-        tone[value] ?? "border-transparent bg-secondary text-secondary-foreground",
-        className,
-      )}
-    >
-      {statusLabel(value)}
-    </span>
-  );
+function Badge({
+  className,
+  variant,
+  asChild = false,
+  ...props
+}: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
+  const Comp = asChild ? Slot : "span";
+
+  return <Comp data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />;
 }
+
+export { Badge, badgeVariants };
