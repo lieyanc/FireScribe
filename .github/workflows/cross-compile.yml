@@ -12,6 +12,13 @@ on:
 permissions:
   contents: write
 
+# All branch builds publish the same rolling `dev` tag/release. Cancel an older
+# branch run before a newer one can overwrite it; tag releases remain isolated
+# by their full ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_type == 'branch' && 'dev' || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   meta:
     name: Build Metadata
@@ -47,8 +54,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install poppler-utils
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+      - name: Install document test dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils fonts-droid-fallback
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -206,6 +213,23 @@ jobs:
           }
           EOF
 
+      - name: Verify release asset set
+        run: |
+          set -euo pipefail
+          expected=(
+            firescribe-windows-amd64.exe
+            firescribe-windows-arm64.exe
+            firescribe-linux-amd64
+            firescribe-linux-arm64
+            firescribe-linux-riscv64
+            firescribe-darwin-amd64
+            firescribe-darwin-arm64
+          )
+          for binary in "${expected[@]}"; do
+            test -f "release/${binary}" || { echo "missing release/${binary}" >&2; exit 1; }
+            test -f "release/${binary}.sha256" || { echo "missing release/${binary}.sha256" >&2; exit 1; }
+          done
+
       - name: Sign release assets
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -268,6 +292,23 @@ jobs:
           }
           EOF
 
+      - name: Verify release asset set
+        run: |
+          set -euo pipefail
+          expected=(
+            firescribe-windows-amd64.exe
+            firescribe-windows-arm64.exe
+            firescribe-linux-amd64
+            firescribe-linux-arm64
+            firescribe-linux-riscv64
+            firescribe-darwin-amd64
+            firescribe-darwin-arm64
+          )
+          for binary in "${expected[@]}"; do
+            test -f "release/${binary}" || { echo "missing release/${binary}" >&2; exit 1; }
+            test -f "release/${binary}.sha256" || { echo "missing release/${binary}.sha256" >&2; exit 1; }
+          done
+
       - name: Sign release assets
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -311,8 +352,21 @@ jobs:
               { owner, repo, per_page: 100 },
             );
 
+            const runStatus = new Map();
             for (const artifact of artifacts) {
-              if (artifact.workflow_run?.id === context.runId) continue;
+              const runId = artifact.workflow_run?.id;
+              if (!runId || runId === context.runId) continue;
+              if (!runStatus.has(runId)) {
+                const { data: run } = await github.rest.actions.getWorkflowRun({
+                  owner,
+                  repo,
+                  run_id: runId,
+                });
+                runStatus.set(runId, run.status);
+              }
+              // Never delete an artifact that another queued/in-progress run
+              // may still need for its release job.
+              if (runStatus.get(runId) !== 'completed') continue;
               await github.rest.actions.deleteArtifact({
                 owner,
                 repo,
