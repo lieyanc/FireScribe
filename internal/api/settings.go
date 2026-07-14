@@ -82,7 +82,14 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "settings runtime is not configured"})
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsFromConfig(s.runtime.Config()))
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	cfg := s.runtime.Config()
+	if _, err := s.syncCurrentPrompt(r.Context(), cfg); err != nil {
+		writeError(w, fmt.Errorf("sync prompt library: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, settingsFromConfig(cfg))
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +97,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "settings runtime is not configured"})
 		return
 	}
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
 	var req settingsUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, fmt.Errorf("parse settings: %w", err))
@@ -174,6 +183,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, fmt.Errorf("settings saved but writing prompt file failed: %w", err))
 			return
 		}
+	}
+	if _, err := s.syncCurrentPrompt(r.Context(), next); err != nil {
+		writeError(w, fmt.Errorf("settings saved but syncing prompt library failed: %w", err))
+		return
 	}
 	writeJSON(w, http.StatusOK, settingsFromConfig(next))
 }
