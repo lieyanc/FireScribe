@@ -27,7 +27,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Skeleton } from "../components/ui/skeleton";
 import { Spinner } from "../components/ui/spinner";
 import { applyUpdate, checkUpdate, dismissUpdate, getAdminToken, getUpdateStatus, getVersion, setAdminToken } from "../lib/api";
-import { formatTime, statusLabel } from "../lib/utils";
+import { formatTime, statusLabel } from "../lib/format";
 
 const BUSY_STATE_LABELS: Record<string, string> = {
   checking: "正在检查更新…",
@@ -144,7 +144,7 @@ export function SystemPage() {
     <div className="flex flex-col gap-5">
       <PageHeader title="系统" description={busy ? BUSY_STATE_LABELS[state] : "查看版本信息并安全管理 OTA 更新。"}>
         <Button variant="secondary" disabled={check.isPending || busy || apply.isPending} onClick={() => check.mutate()}>
-          {check.isPending ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+          {check.isPending ? <Spinner /> : <RefreshCw />}
           {check.isPending ? "检查中" : "检查更新"}
         </Button>
 
@@ -152,7 +152,7 @@ export function SystemPage() {
           <AlertDialog open={applyDialogOpen} onOpenChange={setApplyDialogOpen}>
             <AlertDialogTrigger asChild>
               <Button disabled={apply.isPending || busy}>
-                {ready ? <RotateCw data-icon="inline-start" /> : <Download data-icon="inline-start" />}
+                {ready ? <RotateCw /> : <Download />}
                 {ready ? "重启应用" : "下载并更新"}
               </Button>
             </AlertDialogTrigger>
@@ -175,11 +175,11 @@ export function SystemPage() {
                   }}
                 >
                   {apply.isPending ? (
-                    <Spinner data-icon="inline-start" />
+                    <Spinner />
                   ) : ready ? (
-                    <RotateCw data-icon="inline-start" />
+                    <RotateCw />
                   ) : (
-                    <Download data-icon="inline-start" />
+                    <Download />
                   )}
                   {apply.isPending ? "提交中" : ready ? "确认重启" : "确认更新"}
                 </AlertDialogAction>
@@ -192,7 +192,7 @@ export function SystemPage() {
           <AlertDialog open={dismissDialogOpen} onOpenChange={setDismissDialogOpen}>
             <AlertDialogTrigger asChild>
               <Button variant="ghost" disabled={dismiss.isPending || apply.isPending}>
-                <X data-icon="inline-start" />
+                <X />
                 忽略更新
               </Button>
             </AlertDialogTrigger>
@@ -212,7 +212,7 @@ export function SystemPage() {
                     dismiss.mutate();
                   }}
                 >
-                  {dismiss.isPending ? <Spinner data-icon="inline-start" /> : <X data-icon="inline-start" />}
+                  {dismiss.isPending ? <Spinner /> : <X />}
                   {dismiss.isPending ? "处理中" : "确认忽略"}
                 </AlertDialogAction>
               </AlertDialogFooter>
@@ -331,7 +331,7 @@ export function SystemPage() {
             </div>
           ) : notes ? (
             <ScrollArea className="h-72 rounded-md border">
-              <pre className="whitespace-pre-wrap p-4">{notes}</pre>
+              <pre className="whitespace-pre-wrap p-4 text-sm">{notes}</pre>
             </ScrollArea>
           ) : (
             <Empty className="min-h-40">

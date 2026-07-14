@@ -1,11 +1,11 @@
 import { Activity, FileWarning, PencilLine, ScanText } from "lucide-react";
-import type { AuthorCommonError, AuthorRecognitionMetrics } from "../../lib/api";
-import { Badge } from "../ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { Skeleton } from "../ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { EmptyState, MetricCard } from "./chrome";
+import type { AuthorCommonError, AuthorRecognitionMetrics } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState, MetricCard } from "@/components/app/chrome";
 
 export function AuthorRecognitionMetricsPanel({
   metrics,

@@ -18,7 +18,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { toast } from "sonner";
-import { EmptyState, IconTooltipButton, PageHeader } from "../components/app/chrome";
+import { EmptyState, IconTooltipButton, LabeledValue, PageHeader, PendingButton } from "../components/app/chrome";
 import { StatusBadge } from "../components/app/status-badge";
 import {
   AlertDialog,
@@ -59,7 +59,8 @@ import {
   RecognitionResult,
   TextVersion,
 } from "../lib/api";
-import { cn, formatTime, statusLabel } from "../lib/utils";
+import { formatTime, statusLabel } from "../lib/format";
+import { cn } from "../lib/utils";
 
 // final 与 manual 同级:取两者中最新的一份,避免旧定稿永远压过新保存的草稿。
 const kindRank: Record<string, number> = { final: 0, manual: 0, candidate: 2, raw_selected: 3 };
@@ -250,6 +251,12 @@ export function ReviewPage() {
     currentPageButtonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [currentPageID, orderedPages.length]);
 
+  function invalidatePageData(pageID: string, docID: string) {
+    for (const key of [["text-versions", pageID], ["page", pageID], ["pages", docID], ["document", docID]]) {
+      queryClient.invalidateQueries({ queryKey: key });
+    }
+  }
+
   const save = useMutation({
     mutationFn: (input: { status: "draft" | "verified"; text: string }) =>
       createTextVersion(currentPageID, {
@@ -268,10 +275,7 @@ export function ReviewPage() {
       if (editorStillMatches) {
         setDirty(false);
       }
-      queryClient.invalidateQueries({ queryKey: ["text-versions", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["page", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["pages", saved.document_id] });
-      queryClient.invalidateQueries({ queryKey: ["document", saved.document_id] });
+      invalidatePageData(saved.page_id, saved.document_id);
       if (variables.status === "draft") {
         toast.success("草稿已保存");
         return;
@@ -304,10 +308,7 @@ export function ReviewPage() {
         source_result_id: result.id,
       }),
     onSuccess: (saved) => {
-      queryClient.invalidateQueries({ queryKey: ["text-versions", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["page", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["pages", saved.document_id] });
-      queryClient.invalidateQueries({ queryKey: ["document", saved.document_id] });
+      invalidatePageData(saved.page_id, saved.document_id);
       toast.success("已设为候选稿", { description: "候选正文与 OCR 来源已保存到版本历史。" });
     },
     onError: (error: Error) => toast.error("保存候选稿失败", { description: error.message }),
@@ -320,10 +321,7 @@ export function ReviewPage() {
         segments,
       }),
     onSuccess: (merged) => {
-      queryClient.invalidateQueries({ queryKey: ["text-versions", merged.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["page", merged.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["pages", documentID] });
-      queryClient.invalidateQueries({ queryKey: ["document", documentID] });
+      invalidatePageData(merged.page_id, documentID);
       toast.success("已生成保守合并候选稿", { description: "来源结果、Prompt 哈希与原始响应已保存，可在版本历史中继续校对。" });
     },
     onError: (error: Error) => toast.error("候选合并失败", { description: error.message }),
@@ -342,10 +340,7 @@ export function ReviewPage() {
       setSelectedResultID(saved.source_result_id || "");
       setDirty(false);
       savedPageRef.current = saved.page_id;
-      queryClient.invalidateQueries({ queryKey: ["text-versions", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["page", saved.page_id] });
-      queryClient.invalidateQueries({ queryKey: ["pages", saved.document_id] });
-      queryClient.invalidateQueries({ queryKey: ["document", saved.document_id] });
+      invalidatePageData(saved.page_id, saved.document_id);
       toast.success("历史版本已恢复", { description: "已创建新的人工草稿，原版本仍保留在历史中。" });
     },
     onError: (error: Error) => toast.error("恢复版本失败", { description: error.message }),
@@ -452,7 +447,7 @@ export function ReviewPage() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, [canSave, editor, nextPage?.page_id, previousPage?.page_id]);
 
   function applyEditorAction(action: EditorAction) {
     if (action.type === "copy_result") {
@@ -563,7 +558,7 @@ export function ReviewPage() {
                   }
                 }}
               >
-                <RefreshCw data-icon="inline-start" />
+                <RefreshCw />
                 重试
               </Button>
             </div>
@@ -615,7 +610,7 @@ export function ReviewPage() {
           disabled={!previousPage}
           onClick={() => previousPage && goToPage(previousPage.page_id)}
         >
-          <ChevronLeft data-icon="inline-start" />
+          <ChevronLeft />
         </IconTooltipButton>
         <IconTooltipButton
           label="下一页 (J)"
@@ -624,20 +619,27 @@ export function ReviewPage() {
           disabled={!nextPage}
           onClick={() => nextPage && goToPage(nextPage.page_id)}
         >
-          <ChevronRight data-icon="inline-start" />
+          <ChevronRight />
         </IconTooltipButton>
-        <Button
+        <PendingButton
           variant={dirty ? "default" : "secondary"}
           onClick={() => save.mutate({ status: "draft", text: editor })}
           disabled={!canSave}
+          pending={save.isPending && save.variables?.status === "draft"}
+          pendingLabel="保存中…"
+          icon={<Save />}
         >
-          {save.isPending && save.variables?.status === "draft" ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
-          {save.isPending && save.variables?.status === "draft" ? "保存中…" : "保存"}
-        </Button>
-        <Button onClick={finalizePage} disabled={!canSave}>
-          {save.isPending && save.variables?.status === "verified" ? <Spinner data-icon="inline-start" /> : <Check data-icon="inline-start" />}
-          {save.isPending && save.variables?.status === "verified" ? "定稿中…" : "确认定稿"}
-        </Button>
+          保存
+        </PendingButton>
+        <PendingButton
+          onClick={finalizePage}
+          disabled={!canSave}
+          pending={save.isPending && save.variables?.status === "verified"}
+          pendingLabel="定稿中…"
+          icon={<Check />}
+        >
+          确认定稿
+        </PendingButton>
       </PageHeader>
 
       <Card>
@@ -654,7 +656,7 @@ export function ReviewPage() {
                 title={`第 ${item.page_no} 页 · ${pageReviewLabel(item)}`}
                 onClick={() => goToPage(item.page_id)}
               >
-                {item.has_final ? <Check data-icon="inline-start" /> : item.has_manual ? <Save data-icon="inline-start" /> : <FileText data-icon="inline-start" />}
+                {item.has_final ? <Check /> : item.has_manual ? <Save /> : <FileText />}
                 第 {item.page_no} 页 · {pageReviewLabel(item)}
               </Button>
             ))}
@@ -685,7 +687,7 @@ export function ReviewPage() {
                 size="icon-sm"
                 onClick={toggleRegionMode}
               >
-                <ScanLine data-icon="inline-start" />
+                <ScanLine />
               </IconTooltipButton>
               <IconTooltipButton
                 label="旋转 90°"
@@ -698,7 +700,7 @@ export function ReviewPage() {
                   setRotation((value) => (value + 90) % 360);
                 }}
               >
-                <RotateCw data-icon="inline-start" />
+                <RotateCw />
               </IconTooltipButton>
               <IconTooltipButton
                 label="重置视图"
@@ -710,7 +712,7 @@ export function ReviewPage() {
                   setRotation(0);
                 }}
               >
-                <Undo2 data-icon="inline-start" />
+                <Undo2 />
               </IconTooltipButton>
             </div>
           </CardHeader>
@@ -737,7 +739,7 @@ export function ReviewPage() {
                     setNaturalSize({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })
                   }
                 />
-                {highlightRegion ? <RegionOverlay region={highlightRegion} className="border-amber-500 bg-amber-400/20" /> : null}
+                {highlightRegion ? <RegionOverlay region={highlightRegion} className="border-warning bg-warning/20" /> : null}
                 {regionSelection ? <RegionOverlay region={regionSelection} className="border-primary bg-primary/15" /> : null}
               </div>
             ) : (
@@ -765,10 +767,10 @@ export function ReviewPage() {
                 <div className="text-xs text-muted-foreground">{editor.length} 字</div>
               </div>
               <div className="grid gap-2 text-sm sm:grid-cols-4">
-                <StatusItem label="识别" value={`${page.data?.recognition_count ?? 0} 次`} />
-                <StatusItem label="模型" value={page.data?.last_model || "-"} />
-                <StatusItem label="置信度" value={page.data?.best_confidence == null ? "-" : page.data.best_confidence.toFixed(2)} />
-                <StatusItem label="更新" value={formatTime(page.data?.updated_at)} />
+                <LabeledValue label="识别" value={`${page.data?.recognition_count ?? 0} 次`} className="font-medium" />
+                <LabeledValue label="模型" value={page.data?.last_model || "-"} className="font-medium" />
+                <LabeledValue label="置信度" value={page.data?.best_confidence == null ? "-" : page.data.best_confidence.toFixed(2)} className="font-medium" />
+                <LabeledValue label="更新" value={formatTime(page.data?.updated_at)} className="font-medium" />
               </div>
             </CardHeader>
             <CardContent className="flex flex-1 flex-col p-0">
@@ -829,16 +831,18 @@ export function ReviewPage() {
                         <div className="p-3 text-sm leading-6 text-muted-foreground">{activeResult.text}</div>
                       </ScrollArea>
                       <div className="flex flex-wrap gap-2">
-                        <Button
+                        <PendingButton
                           size="sm"
                           onClick={() => markCandidate(activeResult)}
                           disabled={saveCandidate.isPending}
+                          pending={saveCandidate.isPending}
+                          pendingLabel="保存中…"
+                          icon={<Check />}
                         >
-                          {saveCandidate.isPending ? <Spinner data-icon="inline-start" /> : <Check data-icon="inline-start" />}
-                          {saveCandidate.isPending ? "保存中…" : "设为候选稿"}
-                        </Button>
+                          设为候选稿
+                        </PendingButton>
                         <Button variant="secondary" size="sm" onClick={() => copyResult(activeResult)}>
-                          <Copy data-icon="inline-start" />
+                          <Copy />
                           复制到编辑区
                         </Button>
                       </div>
@@ -883,11 +887,11 @@ export function ReviewPage() {
                   </FieldGroup>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="secondary" size="sm" onClick={() => addAnnotation.mutate("page_note")} disabled={addAnnotation.isPending}>
-                      {addAnnotation.isPending && addAnnotation.variables === "page_note" ? <Spinner data-icon="inline-start" /> : <MessageSquarePlus data-icon="inline-start" />}
+                      {addAnnotation.isPending && addAnnotation.variables === "page_note" ? <Spinner /> : <MessageSquarePlus />}
                       批注
                     </Button>
                     <Button variant="secondary" size="sm" onClick={() => addAnnotation.mutate("uncertain_text")} disabled={addAnnotation.isPending}>
-                      {addAnnotation.isPending && addAnnotation.variables === "uncertain_text" ? <Spinner data-icon="inline-start" /> : null}
+                      {addAnnotation.isPending && addAnnotation.variables === "uncertain_text" ? <Spinner /> : null}
                       存疑
                     </Button>
                     <Button
@@ -896,7 +900,7 @@ export function ReviewPage() {
                       onClick={() => addAnnotation.mutate("page_region")}
                       disabled={addAnnotation.isPending || !regionSelection}
                     >
-                      {addAnnotation.isPending && addAnnotation.variables === "page_region" ? <Spinner data-icon="inline-start" /> : <ScanLine data-icon="inline-start" />}
+                      {addAnnotation.isPending && addAnnotation.variables === "page_region" ? <Spinner /> : <ScanLine />}
                       保存区域批注
                     </Button>
                   </div>
@@ -908,7 +912,7 @@ export function ReviewPage() {
                     {annotations.isError ? (
                       <EmptyState title="批注加载失败" description={(annotations.error as Error).message} className="min-h-36">
                         <Button variant="outline" size="sm" onClick={() => void annotations.refetch()} disabled={annotations.isFetching}>
-                          {annotations.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                          {annotations.isFetching ? <Spinner /> : <RefreshCw />}
                           重试
                         </Button>
                       </EmptyState>
@@ -943,7 +947,7 @@ export function ReviewPage() {
                                   className="mt-1 h-auto px-0"
                                   onClick={() => focusLinkedAnnotation(textAnchor, pageRegion)}
                                 >
-                                  <ScanLine data-icon="inline-start" />
+                                  <ScanLine />
                                   定位原图区域
                                 </Button>
                               ) : null}
@@ -957,7 +961,7 @@ export function ReviewPage() {
                                     disabled={updateAnnotationStatus.isPending}
                                     onClick={() => updateAnnotationStatus.mutate({ annotationID: annotation.id, status: "resolved" })}
                                   >
-                                    {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id && updateAnnotationStatus.variables.status === "resolved" ? <Spinner data-icon="inline-start" /> : null}
+                                    {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id && updateAnnotationStatus.variables.status === "resolved" ? <Spinner /> : null}
                                     解决
                                   </Button>
                                   <Button
@@ -966,7 +970,7 @@ export function ReviewPage() {
                                     disabled={updateAnnotationStatus.isPending}
                                     onClick={() => updateAnnotationStatus.mutate({ annotationID: annotation.id, status: "ignored" })}
                                   >
-                                    {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id && updateAnnotationStatus.variables.status === "ignored" ? <Spinner data-icon="inline-start" /> : null}
+                                    {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id && updateAnnotationStatus.variables.status === "ignored" ? <Spinner /> : null}
                                     忽略
                                   </Button>
                                 </>
@@ -977,7 +981,7 @@ export function ReviewPage() {
                                   disabled={updateAnnotationStatus.isPending}
                                   onClick={() => updateAnnotationStatus.mutate({ annotationID: annotation.id, status: "open" })}
                                 >
-                                  {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id ? <Spinner data-icon="inline-start" /> : null}
+                                  {updateAnnotationStatus.isPending && updateAnnotationStatus.variables?.annotationID === annotation.id ? <Spinner /> : null}
                                   重新打开
                                 </Button>
                               )}
@@ -1016,18 +1020,16 @@ export function ReviewPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>继续编辑</AlertDialogCancel>
-            <AlertDialogAction asChild>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  const target = pendingNavigation;
-                  setPendingNavigation(null);
-                  setDirty(false);
-                  if (target) navigate(target);
-                }}
-              >
-                放弃修改并离开
-              </Button>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const target = pendingNavigation;
+                setPendingNavigation(null);
+                setDirty(false);
+                if (target) navigate(target);
+              }}
+            >
+              放弃修改并离开
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1043,9 +1045,7 @@ export function ReviewPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>返回检查</AlertDialogCancel>
-            <AlertDialogAction asChild>
-              <Button onClick={() => void commitFinal(editor)}>仍然定稿</Button>
-            </AlertDialogAction>
+            <AlertDialogAction onClick={() => void commitFinal(editor)}>仍然定稿</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1082,6 +1082,27 @@ export function ReviewPage() {
 type EditorAction =
   | { type: "copy_result"; resultID: string }
   | { type: "restore_version"; versionID: string };
+
+function DiffSegments({ segments }: { segments: ReturnType<typeof diffChars> }) {
+  return (
+    <>
+      {segments.map((segment, index) => (
+        <span
+          key={`${segment.type}-${index}`}
+          className={cn(
+            segment.type === "insert"
+              ? "bg-primary/15 text-primary"
+              : segment.type === "delete"
+                ? "bg-destructive/15 text-destructive line-through"
+                : "",
+          )}
+        >
+          {segment.text}
+        </span>
+      ))}
+    </>
+  );
+}
 
 function pickVersion(versions: TextVersion[]) {
   return [...versions].sort((a, b) => {
@@ -1172,9 +1193,9 @@ function VersionHistory({
         </ScrollArea>
 
         <div className="grid gap-2 text-xs sm:grid-cols-3">
-          <StatusItem label="类型" value={`${statusLabel(selected.kind)} · ${statusLabel(selected.status)}`} />
-          <StatusItem label="创建者" value={selected.created_by || "-"} />
-          <StatusItem label="来源" value={source?.detail || "-"} />
+          <LabeledValue label="类型" value={`${statusLabel(selected.kind)} · ${statusLabel(selected.status)}`} className="font-medium" />
+          <LabeledValue label="创建者" value={selected.created_by || "-"} className="font-medium" />
+          <LabeledValue label="来源" value={source?.detail || "-"} className="font-medium" />
         </div>
         {candidateMerge.data ? <CandidateMergeDetails merge={candidateMerge.data} /> : null}
         <div>
@@ -1187,15 +1208,17 @@ function VersionHistory({
           <div className="text-xs text-muted-foreground">
             {selected.base_version_id ? `基于版本 ${shortID(selected.base_version_id)}` : "无上游版本"}
           </div>
-          <Button
+          <PendingButton
             size="sm"
             variant="secondary"
             disabled={isRestoring || selected.id === currentVersion?.id}
             onClick={() => onRestore(selected)}
+            pending={isRestoring}
+            pendingLabel="恢复中…"
+            icon={<Undo2 />}
           >
-            {isRestoring ? <Spinner data-icon="inline-start" /> : <Undo2 data-icon="inline-start" />}
-            {isRestoring ? "恢复中…" : "恢复为人工草稿"}
-          </Button>
+            恢复为人工草稿
+          </PendingButton>
         </div>
         <Separator />
         <div>
@@ -1208,20 +1231,7 @@ function VersionHistory({
           ) : currentVersion ? (
             <ScrollArea className="h-32 rounded-md border">
               <div className="whitespace-pre-wrap p-3 text-sm leading-7">
-                {segments.map((segment, index) => (
-                  <span
-                    key={`${segment.type}-${index}`}
-                    className={cn(
-                      segment.type === "insert"
-                        ? "bg-primary/15 text-primary"
-                        : segment.type === "delete"
-                          ? "bg-destructive/15 text-destructive line-through"
-                          : "",
-                    )}
-                  >
-                    {segment.text}
-                  </span>
-                ))}
+                <DiffSegments segments={segments} />
               </div>
             </ScrollArea>
           ) : (
@@ -1240,14 +1250,14 @@ function CandidateMergeDetails({ merge }: { merge: import("../lib/api").Candidat
       <summary className="cursor-pointer px-3 py-2 font-medium">候选合并血缘 · {merge.segments?.length ? `${merge.segments.length} 段` : `${merge.source_result_ids.length} 个来源`}</summary>
       <div className="flex flex-col gap-3 border-t p-3">
         <div className="grid gap-2 text-xs sm:grid-cols-3">
-          <StatusItem label="方式" value={merge.driver} />
-          <StatusItem label="Prompt" value={merge.prompt_version || "-"} />
-          <StatusItem label="哈希" value={shortID(merge.prompt_hash || "-")} />
+          <LabeledValue label="方式" value={merge.driver} className="font-medium" />
+          <LabeledValue label="Prompt" value={merge.prompt_version || "-"} className="font-medium" />
+          <LabeledValue label="哈希" value={shortID(merge.prompt_hash || "-")} className="font-medium" />
         </div>
         <div className="flex flex-col gap-2">
           {merge.source_result_ids.map((id) => {
             const source = sourceMap.get(id);
-            return <div key={id} className="rounded-md border p-2 text-xs"><b>{source?.provider || "OCR"} · {source?.model || "model"}</b>（{shortID(id)}）<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">{source?.text || "来源结果不可用"}</div></div>;
+            return <div key={id} className="rounded-md border p-2 text-xs"><span className="font-medium">{source?.provider || "OCR"} · {source?.model || "model"}</span>（{shortID(id)}）<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">{source?.text || "来源结果不可用"}</div></div>;
           })}
         </div>
         {merge.segments?.length ? <div className="text-xs text-muted-foreground">{merge.segments.map((segment) => `#${segment.ordinal + 1} ${shortID(segment.source_result_id)} [${segment.source_start},${segment.source_end}) → [${segment.output_start},${segment.output_end})`).join("；")}</div> : null}
@@ -1286,9 +1296,9 @@ function RecognitionDetails({ result }: { result: RecognitionResult }) {
       <summary className="cursor-pointer px-3 py-2 font-medium">识别详情</summary>
       <div className="flex flex-col gap-3 border-t p-3">
         <div className="grid gap-2 text-xs sm:grid-cols-3">
-          <StatusItem label="时间" value={formatTime(result.created_at) || "-"} />
-          <StatusItem label="Prompt 版本" value={result.prompt_version || "-"} />
-          <StatusItem label="置信度" value={result.confidence == null ? "-" : result.confidence.toFixed(2)} />
+          <LabeledValue label="时间" value={formatTime(result.created_at) || "-"} className="font-medium" />
+          <LabeledValue label="Prompt 版本" value={result.prompt_version || "-"} className="font-medium" />
+          <LabeledValue label="置信度" value={result.confidence == null ? "-" : result.confidence.toFixed(2)} className="font-medium" />
         </div>
         {fields.map(([label, value]) => (
           <div key={label}>
@@ -1310,15 +1320,6 @@ function formatJSON(value?: string) {
   } catch {
     return value;
   }
-}
-
-function StatusItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate font-medium">{value}</div>
-    </div>
-  );
 }
 
 function Kbd({ children }: { children: string }) {
@@ -1497,10 +1498,9 @@ function DiffView({
                 </SelectContent>
               </Select>
             </Field>
-            <Button size="sm" disabled={mergeIDs.length < 2 || isMerging} onClick={() => onMerge(mergeIDs, mergeProfileID)}>
-              {isMerging ? <Spinner data-icon="inline-start" /> : <GitMerge data-icon="inline-start" />}
-              {isMerging ? "合并中…" : "合并为候选稿"}
-            </Button>
+            <PendingButton size="sm" disabled={mergeIDs.length < 2 || isMerging} onClick={() => onMerge(mergeIDs, mergeProfileID)} pending={isMerging} pendingLabel="合并中…" icon={<GitMerge />}>
+              合并为候选稿
+            </PendingButton>
           </div>
           <p className="text-xs text-muted-foreground">服务端只接受候选中原样出现的完整行；任何扩写或新行都会拒绝，失败不会改动现有文本。</p>
         </div>
@@ -1508,20 +1508,7 @@ function DiffView({
       <CardContent className="p-0">
         <ScrollArea className="h-40">
           <div className="px-3 py-2 text-sm leading-7">
-            {segments.map((segment, index) => (
-              <span
-                key={`${segment.type}-${index}`}
-                className={cn(
-                  segment.type === "insert"
-                    ? "bg-primary/15 text-primary"
-                    : segment.type === "delete"
-                      ? "bg-destructive/15 text-destructive line-through"
-                      : ""
-                )}
-              >
-                {segment.text}
-              </span>
-            ))}
+            <DiffSegments segments={segments} />
           </div>
         </ScrollArea>
         <Separator />
@@ -1544,9 +1531,7 @@ function DiffView({
               ))}
             </div>
           </ScrollArea>
-          <Button size="sm" disabled={!selectedSegments.length || isMerging} onClick={() => onAlignedMerge(selectedSegments)}>
-            {isMerging ? <Spinner data-icon="inline-start" /> : <GitMerge data-icon="inline-start" />}组合并保存候选稿
-          </Button>
+          <PendingButton size="sm" disabled={!selectedSegments.length || isMerging} onClick={() => onAlignedMerge(selectedSegments)} pending={isMerging} icon={<GitMerge />}>组合并保存候选稿</PendingButton>
         </div>
       </CardContent>
     </Card>

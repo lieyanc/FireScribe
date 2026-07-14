@@ -17,7 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { EmptyState, ErrorMessage, IconTooltipButton, MetricCard, PageHeader } from "../components/app/chrome";
+import { EmptyState, ErrorMessage, IconTooltipButton, LabeledValue, MetricCard, PageHeader } from "../components/app/chrome";
 import { StatusBadge } from "../components/app/status-badge";
 import { PageProcessingCard } from "../components/app/page-processing-card";
 import { RecognitionExperimentsCard } from "../components/app/recognition-experiments-card";
@@ -43,7 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
@@ -73,7 +73,7 @@ import {
   type DocumentAsset,
   type RecognitionRun,
 } from "../lib/api";
-import { formatBytes, formatTime } from "../lib/utils";
+import { formatBytes, formatTime } from "../lib/format";
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
 
@@ -97,14 +97,7 @@ function assetFileName(asset: DocumentAsset) {
 }
 
 function InfoField({ label, value }: { label: string; value?: string }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="truncate text-sm" title={value || undefined}>
-        {value || "--"}
-      </div>
-    </div>
-  );
+  return <LabeledValue label={label} value={value || "--"} className="text-sm" title={value || undefined} />;
 }
 
 type DocumentForm = {
@@ -154,7 +147,7 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
           文档信息
         </CardTitle>
         <Button variant="outline" size="sm" disabled={!doc} onClick={() => onOpenChange(true)}>
-          <Pencil data-icon="inline-start" />
+          <Pencil />
           编辑
         </Button>
       </CardHeader>
@@ -230,7 +223,7 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
                 取消
               </Button>
               <Button type="submit" disabled={patchMutation.isPending || !form.title.trim()}>
-                {patchMutation.isPending ? <Spinner data-icon="inline-start" /> : <Pencil data-icon="inline-start" />}
+                {patchMutation.isPending ? <Spinner /> : <Pencil />}
                 {patchMutation.isPending ? "保存中" : "保存"}
               </Button>
             </DialogFooter>
@@ -275,7 +268,7 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
             className="min-h-40"
           >
             <Button variant="outline" size="sm" onClick={() => void assets.refetch()} disabled={assets.isFetching}>
-              {assets.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+              {assets.isFetching ? <Spinner /> : <RefreshCw />}
               重试
             </Button>
           </EmptyState>
@@ -308,7 +301,7 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
                   <TableCell className="text-right">
                     <IconTooltipButton label="下载" variant="ghost" size="icon-sm" asChild>
                       <a href={asset.download_url} download>
-                        <Download data-icon="inline-start" />
+                        <Download />
                       </a>
                     </IconTooltipButton>
                   </TableCell>
@@ -430,7 +423,7 @@ function RecognitionSection({
       <Card>
         <EmptyState title="识别记录加载失败" description={error.message} className="min-h-40">
           <Button variant="outline" size="sm" onClick={onRetry}>
-            <RefreshCw data-icon="inline-start" />
+            <RefreshCw />
             重试
           </Button>
         </EmptyState>
@@ -455,13 +448,13 @@ function RecognitionSection({
                   disabled={cancel.isPending}
                   onClick={() => cancel.mutate(latest.id)}
                 >
-                  {cancel.isPending ? <Spinner data-icon="inline-start" /> : <Ban data-icon="inline-start" />}
+                  {cancel.isPending ? <Spinner /> : <Ban />}
                   取消
                 </Button>
               ) : null}
               {latestHasFailures ? (
                 <Button variant="secondary" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(latest.id)}>
-                  {retry.isPending ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}
+                  {retry.isPending ? <Spinner /> : <RotateCcw />}
                   重试失败页
                 </Button>
               ) : null}
@@ -646,7 +639,7 @@ export function DocumentDetailPage() {
             <div className="flex flex-wrap justify-center gap-2">
               <Button variant="outline" onClick={() => navigate("/")}>返回文档列表</Button>
               <Button onClick={() => void doc.refetch()} disabled={doc.isFetching}>
-                {doc.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                {doc.isFetching ? <Spinner /> : <RefreshCw />}
                 重试
               </Button>
             </div>
@@ -669,10 +662,10 @@ export function DocumentDetailPage() {
           description={`${doc.data?.page_count ?? 0} 页 · ${formatTime(doc.data?.updated_at) || "--"}`}
         >
           <IconTooltipButton label="刷新" variant="outline" size="icon" onClick={() => void pages.refetch()} disabled={pages.isFetching}>
-            {pages.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+            {pages.isFetching ? <Spinner /> : <RefreshCw />}
           </IconTooltipButton>
           <Button onClick={() => recognition.mutate()} disabled={recognition.isPending || !pageItems.length || hasActiveRun}>
-            {recognition.isPending ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+            {recognition.isPending ? <Spinner /> : <Play />}
             {recognition.isPending ? "排队中" : hasActiveRun ? "识别中" : "识别"}
           </Button>
           <Select value={recognitionImageSource} onValueChange={(value) => setRecognitionImageSource(value as "original" | "enhanced")}>
@@ -710,15 +703,15 @@ export function DocumentDetailPage() {
             </SelectContent>
           </Select>
           <Button variant="secondary" disabled={!firstPageID} onClick={() => navigate(`/review/${documentID}/${firstPageID}`)}>
-            <FileText data-icon="inline-start" />
+            <FileText />
             校对
           </Button>
           <Button variant="secondary" disabled={exportMutation.isPending} onClick={() => setExportOpen(true)}>
-            {exportMutation.isPending ? <Spinner data-icon="inline-start" /> : <Download data-icon="inline-start" />}
+            {exportMutation.isPending ? <Spinner /> : <Download />}
             {exportMutation.isPending ? "导出中" : "导出"}
           </Button>
           <IconTooltipButton label="删除文档" variant="outline" size="icon" onClick={() => setDeleteOpen(true)}>
-            <Trash2 data-icon="inline-start" />
+            <Trash2 />
           </IconTooltipButton>
         </PageHeader>
         <div className="flex flex-wrap items-center gap-2">
@@ -744,7 +737,7 @@ export function DocumentDetailPage() {
           <Card className="sm:col-span-2 xl:col-span-4">
             <EmptyState title="页面加载失败" description={pages.error.message}>
               <Button variant="outline" size="sm" onClick={() => void pages.refetch()} disabled={pages.isFetching}>
-                {pages.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                {pages.isFetching ? <Spinner /> : <RefreshCw />}
                 重试
               </Button>
             </EmptyState>
@@ -844,17 +837,21 @@ export function DocumentDetailPage() {
               <Switch id="include-page-numbers" checked={includePageNumbers} onCheckedChange={setIncludePageNumbers} />
             </Field>
             <Field orientation="horizontal" className="rounded-md border p-3">
-              <div className="flex flex-col gap-1">
-                <FieldLabel htmlFor="include-annotations">包含批注</FieldLabel>
+              <FieldContent>
+                <FieldLabel htmlFor="include-annotations">
+                  <FieldTitle>包含批注</FieldTitle>
+                </FieldLabel>
                 <FieldDescription>附带页级批注和区域批注。</FieldDescription>
-              </div>
+              </FieldContent>
               <Switch id="include-annotations" checked={includeAnnotations} onCheckedChange={setIncludeAnnotations} />
             </Field>
             <Field orientation="horizontal" className="rounded-md border p-3">
-              <div className="flex flex-col gap-1">
-                <FieldLabel htmlFor="include-uncertain">保留存疑标记</FieldLabel>
+              <FieldContent>
+                <FieldLabel htmlFor="include-uncertain">
+                  <FieldTitle>保留存疑标记</FieldTitle>
+                </FieldLabel>
                 <FieldDescription>在正文中标出仍待处理的存疑字词。</FieldDescription>
-              </div>
+              </FieldContent>
               <Switch id="include-uncertain" checked={includeUncertain} onCheckedChange={setIncludeUncertain} />
             </Field>
             <ErrorMessage message={exportMutation.error?.message} />
@@ -862,7 +859,7 @@ export function DocumentDetailPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setExportOpen(false)} disabled={exportMutation.isPending}>取消</Button>
             <Button onClick={() => exportMutation.mutate()} disabled={exportMutation.isPending}>
-              {exportMutation.isPending ? <Spinner data-icon="inline-start" /> : <Download data-icon="inline-start" />}
+              {exportMutation.isPending ? <Spinner /> : <Download />}
               {exportMutation.isPending ? "导出中" : "开始导出"}
             </Button>
           </DialogFooter>
@@ -880,11 +877,9 @@ export function DocumentDetailPage() {
           <ErrorMessage message={deleteMutation.error?.message} />
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleteMutation.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction asChild>
-              <Button variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
-                {deleteMutation.isPending ? <Spinner data-icon="inline-start" /> : <Trash2 data-icon="inline-start" />}
-                {deleteMutation.isPending ? "删除中" : "确认删除"}
-              </Button>
+            <AlertDialogAction variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? <Spinner /> : <Trash2 />}
+              {deleteMutation.isPending ? "删除中" : "确认删除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

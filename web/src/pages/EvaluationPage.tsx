@@ -10,7 +10,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { getEvaluationMetrics } from "../lib/api";
-import { formatTime } from "../lib/utils";
+import { formatTime } from "../lib/format";
 
 export function EvaluationPage() {
   const [benchmarkOnly, setBenchmarkOnly] = useState(true);
@@ -73,12 +73,12 @@ export function EvaluationPage() {
             <Card>
               <CardHeader><CardTitle>错误构成</CardTitle><CardDescription>字符级编辑与行级漏识别、猜补、乱序。</CardDescription></CardHeader>
               <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <ErrorStat label="替换" value={data.substitution_count} />
-                <ErrorStat label="漏字" value={data.omission_count} />
-                <ErrorStat label="猜补字" value={data.addition_count} />
-                <ErrorStat label="漏行" value={data.missed_line_count} />
-                <ErrorStat label="猜补行" value={data.guessed_line_count} />
-                <ErrorStat label="乱序行" value={data.reordered_line_count} />
+                <MetricCard label="替换" value={data.substitution_count} />
+                <MetricCard label="漏字" value={data.omission_count} />
+                <MetricCard label="猜补字" value={data.addition_count} />
+                <MetricCard label="漏行" value={data.missed_line_count} />
+                <MetricCard label="猜补行" value={data.guessed_line_count} />
+                <MetricCard label="乱序行" value={data.reordered_line_count} />
               </CardContent>
             </Card>
           </section>
@@ -96,10 +96,6 @@ export function EvaluationPage() {
       ) : null}
     </div>
   );
-}
-
-function ErrorStat({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-lg border bg-muted/20 p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tabular-nums">{value}</div></div>;
 }
 
 function percent(value = 0) {

@@ -2,15 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, ImagePlus, RefreshCw, RotateCcw, ScanLine, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { EmptyState, ErrorMessage } from "./chrome";
-import { StatusBadge } from "./status-badge";
-import { Button } from "../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { Field, FieldDescription, FieldLabel } from "../ui/field";
-import { Progress } from "../ui/progress";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { Spinner } from "../ui/spinner";
-import { Switch } from "../ui/switch";
+import { EmptyState, ErrorMessage } from "@/components/app/chrome";
+import { StatusBadge } from "@/components/app/status-badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import {
   cancelJob,
   getPageProcessingPreview,
@@ -19,8 +19,8 @@ import {
   startPageProcessing,
   type PageDetail,
   type PageProcessingConfig,
-} from "../../lib/api";
-import { formatTime } from "../../lib/utils";
+} from "@/lib/api";
+import { formatTime } from "@/lib/format";
 
 const ACTIVE = new Set(["queued", "running"]);
 
@@ -148,15 +148,15 @@ export function PageProcessingCard({ documentID, pages }: { documentID: string; 
           {latest ? <StatusBadge value={latest.status} /> : null}
           {active ? (
             <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(latest.job_id)}>
-              {cancel.isPending ? <Spinner data-icon="inline-start" /> : <Ban data-icon="inline-start" />}取消
+              {cancel.isPending ? <Spinner /> : <Ban />}取消
             </Button>
           ) : latest && ["failed", "partial"].includes(latest.status) ? (
             <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(latest.job_id)}>
-              {retry.isPending ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}重试失败页
+              {retry.isPending ? <Spinner /> : <RotateCcw />}重试失败页
             </Button>
           ) : null}
           <Button size="sm" disabled={!pages.length || !!active || process.isPending} onClick={() => process.mutate()}>
-            {process.isPending ? <Spinner data-icon="inline-start" /> : <ImagePlus data-icon="inline-start" />}
+            {process.isPending ? <Spinner /> : <ImagePlus />}
             {latest?.status === "succeeded" ? "重新处理全部页" : "处理全部页"}
           </Button>
         </div>
@@ -199,7 +199,7 @@ export function PageProcessingCard({ documentID, pages }: { documentID: string; 
             </Select>
           </Field>
           <Button variant="ghost" size="sm" disabled={preview.isFetching || !selectedPageID} onClick={() => void preview.refetch()}>
-            {preview.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}刷新预览
+            {preview.isFetching ? <Spinner /> : <RefreshCw />}刷新预览
           </Button>
         </div>
 

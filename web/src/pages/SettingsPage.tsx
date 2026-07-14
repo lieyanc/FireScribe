@@ -48,6 +48,7 @@ import {
   type Settings,
   type SettingsInput,
 } from "../lib/api";
+import { cn } from "../lib/utils";
 
 type FormState = {
   use_mock_ocr: boolean;
@@ -209,11 +210,11 @@ export function SettingsPage() {
         description={isDirty ? "存在未保存的更改；检查无误后保存。" : "配置识别引擎、图像处理与提示词。"}
       >
         <Button variant="secondary" disabled={settings.isFetching || save.isPending} onClick={requestReload}>
-          {settings.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+          {settings.isFetching ? <Spinner /> : <RefreshCw />}
           重新加载
         </Button>
         <Button disabled={saveDisabled} onClick={submit}>
-          {save.isPending ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+          {save.isPending ? <Spinner /> : <Save />}
           {save.isPending ? "保存中" : "保存更改"}
         </Button>
       </PageHeader>
@@ -398,7 +399,7 @@ export function SettingsPage() {
                 void reload();
               }}
             >
-              {settings.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+              {settings.isFetching ? <Spinner /> : <RefreshCw />}
               {settings.isFetching ? "重新加载中" : "放弃并重新加载"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -476,12 +477,12 @@ function RecognizerProfilesCard() {
       <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(22rem,1.2fr)]">
         <div className="flex flex-col gap-2">
           <Button variant="secondary" className="justify-start" onClick={() => { setEditingID(""); setForm(emptyProfileForm()); }}>
-            <Plus data-icon="inline-start" />新建配置
+            <Plus />新建配置
           </Button>
           <ErrorMessage message={profiles.error?.message} />
           {profiles.data?.map((profile) => (
-            <div key={profile.id} className={`flex items-center gap-2 rounded-lg border p-3 ${editingID === profile.id ? "border-primary bg-accent" : ""}`}>
-              <button type="button" className="min-w-0 flex-1 text-left" onClick={() => edit(profile)}>
+            <div key={profile.id} className={cn("flex items-center gap-2 rounded-lg border p-3", editingID === profile.id && "border-primary bg-accent")}>
+              <button type="button" className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-pressed={editingID === profile.id} onClick={() => edit(profile)}>
                 <span className="flex items-center gap-2 text-sm font-medium">
                   <span className="truncate">{profile.name}</span>
                   {profile.is_default ? <Badge variant="secondary">默认</Badge> : null}
@@ -540,7 +541,7 @@ function RecognizerProfilesCard() {
             <Switch checked={Boolean(form.is_default)} onCheckedChange={(checked) => setForm((value) => ({ ...value, is_default: checked }))} />
           </Field>
           <Button className="self-start" disabled={!valid || saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>
-            {saveProfile.isPending ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}{saveProfile.isPending ? "保存中" : editingID ? "更新 Profile" : "创建 Profile"}
+            {saveProfile.isPending ? <Spinner /> : <Save />}{saveProfile.isPending ? "保存中" : editingID ? "更新 Profile" : "创建 Profile"}
           </Button>
         </FieldGroup>
       </CardContent>
@@ -669,7 +670,7 @@ function PromptLibraryCard({ settings }: { settings?: Settings }) {
               disabled={!draftVersion.trim() || !draftContent.trim() || createVersion.isPending}
               onClick={saveDraft}
             >
-              {createVersion.isPending ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+              {createVersion.isPending ? <Spinner /> : <Save />}
               {createVersion.isPending ? "保存中" : "保存为新版本"}
             </Button>
           </FieldGroup>
@@ -684,9 +685,11 @@ function PromptLibraryCard({ settings }: { settings?: Settings }) {
                 <button
                   key={item.id}
                   type="button"
-                  className={`rounded-lg border p-3 text-left transition-colors hover:bg-accent ${
-                    selectedID === item.id ? "border-primary bg-accent" : "border-border"
-                  }`}
+                  aria-pressed={selectedID === item.id}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    selectedID === item.id ? "border-primary bg-accent" : "border-border",
+                  )}
                   onClick={() => setSelectedID(item.id)}
                 >
                   <span className="flex items-center justify-between gap-3">
@@ -713,7 +716,7 @@ function PromptLibraryCard({ settings }: { settings?: Settings }) {
                 <Textarea className="min-h-40 font-mono text-xs" readOnly spellCheck={false} value={selected.content} />
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" size="sm" onClick={() => copySelectedToDraft(selected)}>
-                    <Copy data-icon="inline-start" />
+                    <Copy />
                     基于此版本创建
                   </Button>
                   <Button
@@ -721,7 +724,7 @@ function PromptLibraryCard({ settings }: { settings?: Settings }) {
                     disabled={selected.is_active || activateVersion.isPending}
                     onClick={() => activateVersion.mutate(selected.id)}
                   >
-                    {activateVersion.isPending ? <Spinner data-icon="inline-start" /> : <Check data-icon="inline-start" />}
+                    {activateVersion.isPending ? <Spinner /> : <Check />}
                     {selected.is_active ? "当前已激活" : activateVersion.isPending ? "激活中" : "激活此版本"}
                   </Button>
                 </div>

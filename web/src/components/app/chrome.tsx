@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import { Button, type ButtonProps } from "../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button, type ButtonProps } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Empty,
   EmptyContent,
@@ -10,9 +10,10 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "../ui/empty";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "../../lib/utils";
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 export function PageHeader({
   title,
@@ -111,6 +112,47 @@ export function ErrorMessage({
         ) : null}
       </AlertDescription>
     </Alert>
+  );
+}
+
+export function PendingButton({
+  pending,
+  pendingLabel,
+  icon,
+  children,
+  disabled,
+  ...props
+}: ButtonProps & {
+  pending: boolean;
+  pendingLabel?: ReactNode;
+  icon?: ReactNode;
+}) {
+  return (
+    <Button disabled={pending || disabled} {...props}>
+      {pending ? <Spinner /> : icon}
+      {pending && pendingLabel != null ? pendingLabel : children}
+    </Button>
+  );
+}
+
+export function LabeledValue({
+  label,
+  value,
+  className,
+  title,
+}: {
+  label: string;
+  value: ReactNode;
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 truncate", className)} title={title}>
+        {value}
+      </div>
+    </div>
   );
 }
 

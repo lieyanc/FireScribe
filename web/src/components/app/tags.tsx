@@ -1,14 +1,14 @@
 import { useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Tag as TagIcon, X } from "lucide-react";
-import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import { Field, FieldError, FieldLabel } from "../ui/field";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../ui/input-group";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { Separator } from "../ui/separator";
-import { listTags, setDocumentTags, type Document, type Tag } from "../../lib/api";
-import { cn } from "../../lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
+import { listTags, setDocumentTags, type Document, type Tag } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export function TagChips({ tags, className }: { tags?: Tag[]; className?: string }) {
   if (!tags?.length) return null;
@@ -27,15 +27,14 @@ export function TagChip({ name, onRemove }: { name: string; onRemove?: () => voi
       <TagIcon />
       <span className="truncate">{name}</span>
       {onRemove ? (
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="icon-xs"
           aria-label={`移除标签 ${name}`}
           onClick={onRemove}
+          className="-mr-0.5 rounded-sm opacity-70 outline-none transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <X />
-        </Button>
+          <X className="size-3" />
+        </button>
       ) : null}
     </Badge>
   );
@@ -89,7 +88,7 @@ export function TagEditor({ documentID, tags }: { documentID: string; tags: Tag[
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm">
-          <TagIcon data-icon="inline-start" />
+          <TagIcon />
           标签
           {names.length ? <span className="text-xs text-muted-foreground">{names.length}</span> : null}
         </Button>
@@ -126,7 +125,7 @@ export function TagEditor({ documentID, tags }: { documentID: string; tags: Tag[
                     setInput("");
                   }}
                 >
-                  <Plus data-icon="inline-start" />
+                  <Plus />
                   添加
                 </InputGroupButton>
               </InputGroupAddon>

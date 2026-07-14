@@ -24,7 +24,7 @@ import { Spinner } from "../components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { importDocument, listDocuments, listTags, searchText } from "../lib/api";
-import { formatBytes, formatTime } from "../lib/utils";
+import { formatBytes, formatTime } from "../lib/format";
 
 const statusOptions = [
   { value: "all", label: "全部状态" },
@@ -156,7 +156,7 @@ export function DocumentsPage() {
         </Select>
         {hasFilters ? (
           <Button type="button" variant="ghost" onClick={clearFilters}>
-            <X data-icon="inline-start" />
+            <X />
             清除筛选
           </Button>
         ) : null}
@@ -372,7 +372,7 @@ function ImportDocumentDialog({ label = "导入文档" }: { label?: string }) {
   return (
     <>
       <Button onClick={() => setOpen(true)}>
-        <Upload data-icon="inline-start" />
+        <Upload />
         {label}
       </Button>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -412,7 +412,7 @@ function ImportDocumentDialog({ label = "导入文档" }: { label?: string }) {
                 }}
               />
               <Button type="button" variant="outline" className="w-fit" disabled={upload.isPending} onClick={() => folderInputRef.current?.click()}>
-                <FolderOpen data-icon="inline-start" />
+                <FolderOpen />
                 选择图片文件夹
               </Button>
               {files.length ? (
@@ -474,7 +474,7 @@ function ImportDocumentDialog({ label = "导入文档" }: { label?: string }) {
                 取消
               </Button>
               <Button type="submit" disabled={!files.length || upload.isPending}>
-                {upload.isPending ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
+                {upload.isPending ? <Spinner /> : <Upload />}
                 {upload.isPending ? "导入中" : files.length > 1 ? `导入 ${files.length} 个文件` : "导入"}
               </Button>
             </DialogFooter>

@@ -14,7 +14,7 @@ import { Spinner } from "../components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { createProject, listProjects } from "../lib/api";
-import { formatTime } from "../lib/utils";
+import { formatTime } from "../lib/format";
 
 export function ProjectsPage() {
   const [open, setOpen] = useState(false);
@@ -46,7 +46,7 @@ export function ProjectsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="项目" description="按顺序组织多份文档，并合并导出为一个文件。">
-        <Button onClick={() => setOpen(true)}><Plus data-icon="inline-start" />新建项目</Button>
+        <Button onClick={() => setOpen(true)}><Plus />新建项目</Button>
       </PageHeader>
       <section className="grid gap-3 md:grid-cols-3">
         <MetricCard icon={<FolderKanban />} label="项目" value={projects.isLoading ? <Skeleton className="h-5 w-10" /> : items.length} />
@@ -65,7 +65,7 @@ export function ProjectsPage() {
                   <TableCell>{project.document_count}</TableCell><TableCell className="hidden sm:table-cell">{project.page_count}</TableCell><TableCell className="hidden text-muted-foreground md:table-cell">{formatTime(project.updated_at) || "--"}</TableCell>
                   <TableCell><Button asChild variant="ghost" size="icon"><Link aria-label={`打开 ${project.name}`} to={`/projects/${project.id}`}><ArrowUpRight /></Link></Button></TableCell>
                 </TableRow>
-              )) : <TableRow><TableCell colSpan={5}><EmptyState icon={<FolderKanban />} title="暂无项目" description="新建项目，将相关文档组织成有序合集。"><Button onClick={() => setOpen(true)}><Plus data-icon="inline-start" />新建项目</Button></EmptyState></TableCell></TableRow>}
+              )) : <TableRow><TableCell colSpan={5}><EmptyState icon={<FolderKanban />} title="暂无项目" description="新建项目，将相关文档组织成有序合集。"><Button onClick={() => setOpen(true)}><Plus />新建项目</Button></EmptyState></TableCell></TableRow>}
             </TableBody>
           </Table>
         </CardContent>
@@ -74,7 +74,7 @@ export function ProjectsPage() {
         <DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>新建项目</DialogTitle><DialogDescription>项目可容纳多份文档，并按照指定顺序合并导出。</DialogDescription></DialogHeader>
           <FieldGroup className="py-5"><Field><FieldLabel htmlFor="project-name">名称</FieldLabel><Input id="project-name" autoFocus required value={name} onChange={(e) => setName(e.target.value)} /></Field><Field><FieldLabel htmlFor="project-description">说明</FieldLabel><Textarea id="project-description" value={description} onChange={(e) => setDescription(e.target.value)} /></Field></FieldGroup>
           <ErrorMessage message={create.error?.message} />
-          <DialogFooter className="mt-4"><Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={create.isPending}>取消</Button><Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending ? <Spinner data-icon="inline-start" /> : <Plus data-icon="inline-start" />}创建</Button></DialogFooter>
+          <DialogFooter className="mt-4"><Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={create.isPending}>取消</Button><Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending ? <Spinner /> : <Plus />}创建</Button></DialogFooter>
         </form></DialogContent>
       </Dialog>
     </div>

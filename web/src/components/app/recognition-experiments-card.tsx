@@ -33,7 +33,7 @@ import {
   type PageDetail,
   type RecognitionExperimentInput,
 } from "@/lib/api";
-import { formatTime } from "@/lib/utils";
+import { formatTime } from "@/lib/format";
 
 const ACTIVE_EXPERIMENT_STATUSES = new Set(["queued", "running"]);
 
@@ -45,12 +45,9 @@ type VariantDraft = {
   imageSource: "original" | "enhanced";
 };
 
-let variantSequence = 0;
-
 function newVariant(position: number): VariantDraft {
-  variantSequence += 1;
   return {
-    key: `variant-${variantSequence}`,
+    key: crypto.randomUUID(),
     name: `方案 ${String.fromCharCode(65 + position)}`,
     source: "",
     promptVersionID: "active",
@@ -197,7 +194,7 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
     <Card>
       <CardHeader>
         <CardTitle className="inline-flex items-center gap-2">
-          <FlaskConical />
+          <FlaskConical className="size-5" />
           Prompt / Profile A/B 实验
         </CardTitle>
         <CardDescription>
@@ -243,7 +240,7 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-medium">Variants（至少 2 个）</div>
             <Button variant="outline" size="sm" onClick={() => setVariants((current) => [...current, newVariant(current.length)])}>
-              <Plus data-icon="inline-start" />
+              <Plus />
               添加 Variant
             </Button>
           </div>
@@ -336,7 +333,7 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
 
           <ErrorMessage message={createExperiment.error?.message} />
           <Button className="self-start" disabled={!canCreate || createExperiment.isPending} onClick={() => createExperiment.mutate()}>
-            {createExperiment.isPending ? <Spinner data-icon="inline-start" /> : <FlaskConical data-icon="inline-start" />}
+            {createExperiment.isPending ? <Spinner /> : <FlaskConical />}
             {createExperiment.isPending ? "创建中" : "创建并运行实验"}
           </Button>
         </FieldGroup>
@@ -438,8 +435,8 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
                               onClick={() => selectWinner.mutate({ experimentID: detail.id, variantID: variant.id })}
                             >
                               {selectWinner.isPending && selectWinner.variables?.variantID === variant.id
-                                ? <Spinner data-icon="inline-start" />
-                                : <Trophy data-icon="inline-start" />}
+                                ? <Spinner />
+                                : <Trophy />}
                               {winner ? "Winner" : "选择"}
                             </Button>
                           </TableCell>

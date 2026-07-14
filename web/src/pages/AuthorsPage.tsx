@@ -39,12 +39,12 @@ export function AuthorsPage() {
 
   return <div className="flex flex-col gap-6">
     <PageHeader title="作者档案" description="积累作者笔迹特征、专有词和历史校对样本，并在识别时自动注入上下文。">
-      <Button onClick={() => setOpen(true)}><Plus data-icon="inline-start" />新建档案</Button>
+      <Button onClick={() => setOpen(true)}><Plus />新建档案</Button>
     </PageHeader>
     <section className="grid gap-3 md:grid-cols-3">
       <MetricCard icon={<Signature />} label="作者" value={profiles.isLoading ? <Skeleton className="h-5 w-10" /> : items.length} />
-      <MetricCard label="关联文档" value={items.reduce((sum, item) => sum + item.document_count, 0)} />
-      <MetricCard label="训练样本" value={items.reduce((sum, item) => sum + item.correction_count, 0)} />
+      <MetricCard label="关联文档" value={profiles.isLoading ? <Skeleton className="h-5 w-10" /> : items.reduce((sum, item) => sum + item.document_count, 0)} />
+      <MetricCard label="训练样本" value={profiles.isLoading ? <Skeleton className="h-5 w-10" /> : items.reduce((sum, item) => sum + item.correction_count, 0)} />
     </section>
     <ErrorMessage message={profiles.error?.message} title="作者档案加载失败" onRetry={() => void profiles.refetch()} />
     <Card><CardHeader><CardTitle>档案列表</CardTitle><CardDescription>进入档案可维护词表、关联文档并下载 JSONL 训练数据。</CardDescription></CardHeader><CardContent className="p-0">
@@ -53,9 +53,9 @@ export function AuthorsPage() {
           <TableCell className="max-w-0"><Link className="block truncate font-medium hover:text-primary" to={`/authors/${profile.id}`}>{profile.name}</Link>{profile.notes ? <div className="mt-1 truncate text-xs text-muted-foreground">{profile.notes}</div> : null}</TableCell>
           <TableCell>{profile.document_count}</TableCell><TableCell>{profile.term_count}</TableCell><TableCell>{profile.correction_count}</TableCell>
           <TableCell><Button asChild variant="ghost" size="icon"><Link aria-label={`打开 ${profile.name}`} to={`/authors/${profile.id}`}><ArrowUpRight /></Link></Button></TableCell>
-        </TableRow>) : <TableRow><TableCell colSpan={5}><EmptyState icon={<Signature />} title="暂无作者档案" description="为常见作者建立档案，让后续识别逐步利用已确认的词汇和校对经验。"><Button onClick={() => setOpen(true)}><Plus data-icon="inline-start" />新建档案</Button></EmptyState></TableCell></TableRow>}
+        </TableRow>) : <TableRow><TableCell colSpan={5}><EmptyState icon={<Signature />} title="暂无作者档案" description="为常见作者建立档案，让后续识别逐步利用已确认的词汇和校对经验。"><Button onClick={() => setOpen(true)}><Plus />新建档案</Button></EmptyState></TableCell></TableRow>}
       </TableBody></Table>
     </CardContent></Card>
-    <Dialog open={open} onOpenChange={(value) => !create.isPending && setOpen(value)}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>新建作者档案</DialogTitle><DialogDescription>作者名用于档案检索；说明可记录年代、书写习惯或资料背景。</DialogDescription></DialogHeader><FieldGroup className="py-5"><Field><FieldLabel htmlFor="author-name">作者名</FieldLabel><Input id="author-name" autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel htmlFor="author-notes">档案说明</FieldLabel><Textarea id="author-notes" value={notes} onChange={(event) => setNotes(event.target.value)} /></Field></FieldGroup><ErrorMessage message={create.error?.message} /><DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button><Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending ? <Spinner data-icon="inline-start" /> : <Plus data-icon="inline-start" />}创建</Button></DialogFooter></form></DialogContent></Dialog>
+    <Dialog open={open} onOpenChange={(value) => !create.isPending && setOpen(value)}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>新建作者档案</DialogTitle><DialogDescription>作者名用于档案检索；说明可记录年代、书写习惯或资料背景。</DialogDescription></DialogHeader><FieldGroup className="py-5"><Field><FieldLabel htmlFor="author-name">作者名</FieldLabel><Input id="author-name" autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field><Field><FieldLabel htmlFor="author-notes">档案说明</FieldLabel><Textarea id="author-notes" value={notes} onChange={(event) => setNotes(event.target.value)} /></Field></FieldGroup><ErrorMessage message={create.error?.message} /><DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button><Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending ? <Spinner /> : <Plus />}创建</Button></DialogFooter></form></DialogContent></Dialog>
   </div>;
 }

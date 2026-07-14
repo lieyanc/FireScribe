@@ -25,7 +25,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { cancelJob, listJobEvents, listJobs, rebuildSearchIndex, retryJob } from "../lib/api";
-import { cn, formatTime } from "../lib/utils";
+import { formatTime } from "../lib/format";
+import { cn } from "../lib/utils";
 
 const JOB_TYPE_LABELS: Record<string, string> = {
   recognize_document: "识别文档",
@@ -95,7 +96,7 @@ export function JobsPage() {
           onClick={() => rebuild.mutate()}
           disabled={rebuild.isPending || items.some((job) => job.type === "rebuild_search_index" && ["queued", "running"].includes(job.status))}
         >
-          {rebuild.isPending ? <Spinner data-icon="inline-start" /> : <DatabaseZap data-icon="inline-start" />}
+          {rebuild.isPending ? <Spinner /> : <DatabaseZap />}
           重建搜索索引
         </Button>
       </PageHeader>
@@ -194,7 +195,7 @@ export function JobsPage() {
                       {job.last_error ? (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button type="button" className="mt-1 block max-w-md cursor-help truncate text-left text-xs text-destructive">
+                            <button type="button" className="mt-1 block max-w-md cursor-help truncate text-left text-xs text-destructive rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                               {job.last_error}
                             </button>
                           </TooltipTrigger>
@@ -228,7 +229,7 @@ export function JobsPage() {
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button type="button" className="cursor-help">{formatTime(job.created_at)}</button>
+                          <button type="button" className="cursor-help rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">{formatTime(job.created_at)}</button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom" align="start">
                           <div className="flex flex-col gap-0.5">
@@ -319,7 +320,7 @@ export function JobsPage() {
                 if (cancelID) cancel.mutate(cancelID);
               }}
             >
-              {cancel.isPending ? <Spinner data-icon="inline-start" /> : null}
+              {cancel.isPending ? <Spinner /> : null}
               确认取消
             </AlertDialogAction>
           </AlertDialogFooter>

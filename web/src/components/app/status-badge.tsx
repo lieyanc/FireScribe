@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { statusLabel } from "@/lib/utils";
+import { statusLabel } from "@/lib/format";
 
 const statusVariants = {
   failed: "destructive",

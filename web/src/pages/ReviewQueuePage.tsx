@@ -9,7 +9,7 @@ import { Slider } from "../components/ui/slider";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { listReviewQueue } from "../lib/api";
-import { formatTime } from "../lib/utils";
+import { formatTime } from "../lib/format";
 
 export function ReviewQueuePage() {
   const [thresholdPercent, setThresholdPercent] = useState(80);

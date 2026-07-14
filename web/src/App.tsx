@@ -208,7 +208,7 @@ function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; them
                   if (isMobile) setOpenMobile(false);
                 }}
               >
-                <BookOpenText data-icon="inline-start" />
+                <BookOpenText />
                 <span>FireScribe</span>
               </Link>
             </SidebarMenuButton>
@@ -253,7 +253,7 @@ function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; them
               aria-label={theme === "dark" ? "切换为浅色模式" : "切换为深色模式"}
               onClick={onToggleTheme}
             >
-              {theme === "dark" ? <Sun data-icon="inline-start" /> : <Moon data-icon="inline-start" />}
+              {theme === "dark" ? <Sun /> : <Moon />}
               <span>{theme === "dark" ? "浅色模式" : "深色模式"}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -279,7 +279,7 @@ function AppNavigationItem({ item, pathname }: { item: NavigationItem; pathname:
             if (isMobile) setOpenMobile(false);
           }}
         >
-          <Icon data-icon="inline-start" />
+          <Icon />
           <span>{item.label}</span>
         </Link>
       </SidebarMenuButton>
@@ -344,7 +344,7 @@ function NotFoundPage() {
       <EmptyContent>
         <Button asChild>
           <Link to="/">
-            <ArrowLeft data-icon="inline-start" />
+            <ArrowLeft />
             返回文档库
           </Link>
         </Button>

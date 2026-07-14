@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download, FileClock, ListTree } from "lucide-react";
-import { Button } from "../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { ScrollArea } from "../ui/scroll-area";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { EmptyState, ErrorMessage } from "./chrome";
-import { StatusBadge } from "./status-badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EmptyState, ErrorMessage } from "@/components/app/chrome";
+import { StatusBadge } from "@/components/app/status-badge";
 import {
   getExportSnapshot,
   getProjectExportSnapshot,
@@ -14,8 +14,8 @@ import {
   listProjectExports,
   type ExportFile,
   type ProjectExport,
-} from "../../lib/api";
-import { formatTime } from "../../lib/utils";
+} from "@/lib/api";
+import { formatTime } from "@/lib/format";
 
 type HistoryItem = ExportFile | ProjectExport;
 
@@ -41,7 +41,7 @@ export function ExportHistoryCard({ scope, targetID }: { scope: "document" | "pr
         <CardDescription>每次成功导出会保存逐页文本版本和实际包含的批注快照，刷新后仍可追溯和下载。</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 p-0">
-        <ErrorMessage message={history.error?.message || snapshot.error?.message} />
+        <div className="px-6 pt-0"><ErrorMessage message={history.error?.message || snapshot.error?.message} /></div>
         <Table>
           <TableHeader><TableRow><TableHead>格式 / 范围</TableHead><TableHead className="w-28">状态</TableHead><TableHead className="hidden w-40 md:table-cell">创建</TableHead><TableHead className="w-44 text-right">操作</TableHead></TableRow></TableHeader>
           <TableBody>
@@ -55,9 +55,9 @@ export function ExportHistoryCard({ scope, targetID }: { scope: "document" | "pr
                 <TableCell className="hidden text-muted-foreground md:table-cell">{formatTime(item.created_at) || "--"}</TableCell>
                 <TableCell><div className="flex justify-end gap-2">
                   <Button variant={selectedID === item.id ? "secondary" : "outline"} size="sm" onClick={() => setSelectedID((current) => current === item.id ? "" : item.id)}>
-                    <ListTree data-icon="inline-start" />快照
+                    <ListTree />快照
                   </Button>
-                  {item.download_url ? <Button asChild variant="outline" size="sm"><a href={item.download_url}><Download data-icon="inline-start" />下载</a></Button> : null}
+                  {item.download_url ? <Button asChild variant="outline" size="sm"><a href={item.download_url}><Download />下载</a></Button> : null}
                 </div></TableCell>
               </TableRow>
             )) : <TableRow><TableCell colSpan={4}><EmptyState icon={<FileClock />} title={history.isLoading ? "正在加载导出历史" : "暂无导出历史"} description={history.isLoading ? undefined : "创建导出后会在此保留状态、选项和逐页来源。"} /></TableCell></TableRow>}
@@ -67,7 +67,7 @@ export function ExportHistoryCard({ scope, targetID }: { scope: "document" | "pr
         {selectedID ? (
           <div className="border-t p-4">
             <div className="mb-3 text-sm font-medium">逐页来源快照</div>
-            <ScrollArea className="max-h-80 rounded-md border">
+            <ScrollArea className="h-80 rounded-md border">
               <div className="divide-y">
                 {(snapshot.data ?? []).map((page) => (
                   <div key={`${page.document_id}-${page.page_id}-${page.ordinal}`} className="grid gap-2 p-3 text-sm md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">

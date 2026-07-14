@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Save, Trash2 } from "lucide-react";
+import { Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState, ErrorMessage } from "@/components/app/chrome";
 import { Badge } from "@/components/ui/badge";
@@ -160,7 +160,7 @@ export function ProviderAdaptersCard() {
       <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(24rem,1.2fr)]">
         <div className="flex min-w-0 flex-col gap-2">
           <Button variant="secondary" className="justify-start" onClick={createNew}>
-            <Plus data-icon="inline-start" />
+            <Plus />
             新建 Adapter
           </Button>
           <ErrorMessage message={adapters.error?.message} />
@@ -184,9 +184,6 @@ export function ProviderAdaptersCard() {
                   {adapter.engine} · {adapter.model || "无固定模型"}
                 </span>
               </button>
-              <Button variant="ghost" size="icon-sm" aria-label={`编辑 ${adapter.name}`} onClick={() => edit(adapter)}>
-                <Pencil />
-              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -338,7 +335,7 @@ export function ProviderAdaptersCard() {
 
           <ErrorMessage message={saveAdapter.error?.message} />
           <Button className="self-start" disabled={!valid || saveAdapter.isPending} onClick={() => saveAdapter.mutate(form)}>
-            {saveAdapter.isPending ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+            {saveAdapter.isPending ? <Spinner /> : <Save />}
             {saveAdapter.isPending ? "保存中" : editingID ? "更新 Adapter" : "创建 Adapter"}
           </Button>
         </FieldGroup>
