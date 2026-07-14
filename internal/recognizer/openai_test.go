@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,6 +95,7 @@ func TestRecognizePageSuccessAndRequestShape(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
+		w.Header().Set("X-Request-Id", "req_test_123")
 		fmt.Fprint(w, chatResponse("识别文本", "stop"))
 	}))
 	defer server.Close()
@@ -116,6 +118,10 @@ func TestRecognizePageSuccessAndRequestShape(t *testing.T) {
 	}
 	if result.Metadata["attempts"].(int) != 1 {
 		t.Fatalf("attempts metadata = %v", result.Metadata["attempts"])
+	}
+	headers, ok := result.Metadata["response_headers"].(map[string]string)
+	if !ok || headers["x-request-id"] != "req_test_123" {
+		t.Fatalf("response headers metadata = %#v", result.Metadata["response_headers"])
 	}
 }
 
@@ -146,6 +152,45 @@ func TestRecognizePageRetriesOn429ThenSucceeds(t *testing.T) {
 	}
 	if result.Metadata["attempts"].(int) != 3 {
 		t.Fatalf("attempts = %v", result.Metadata["attempts"])
+	}
+}
+
+func TestRecognizePageExtractsExplicitConfidence(t *testing.T) {
+	imagePath := testImage(t, t.TempDir(), 20, 20)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","confidence":87.5,"message":{"content":"识别文本"}}]}`)
+	}))
+	defer server.Close()
+
+	result, err := recognize(t, newTestRecognizer(t, server.URL, nil), imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Confidence == nil || math.Abs(*result.Confidence-0.875) > 1e-9 {
+		t.Fatalf("confidence = %v, want 0.875", result.Confidence)
+	}
+	if result.Metadata["confidence_source"] != "choices[0].confidence" {
+		t.Fatalf("confidence source = %v", result.Metadata["confidence_source"])
+	}
+}
+
+func TestRecognizePageDerivesConfidenceFromTokenLogprobs(t *testing.T) {
+	imagePath := testImage(t, t.TempDir(), 20, 20)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"content":"识别文本"},"logprobs":{"content":[{"logprob":-0.1},{"logprob":-0.3}]}}]}`)
+	}))
+	defer server.Close()
+
+	result, err := recognize(t, newTestRecognizer(t, server.URL, nil), imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := math.Exp(-0.2)
+	if result.Confidence == nil || math.Abs(*result.Confidence-want) > 1e-9 {
+		t.Fatalf("confidence = %v, want %v", result.Confidence, want)
+	}
+	if result.Metadata["confidence_source"] != "choices[0].logprobs.content" {
+		t.Fatalf("confidence source = %v", result.Metadata["confidence_source"])
 	}
 }
 
@@ -277,5 +322,36 @@ func TestPromptFallsBackToEmbeddedDefault(t *testing.T) {
 	prompt, _ := rec.promptText()
 	if !strings.Contains(prompt, "忠实转录") {
 		t.Fatalf("fallback prompt = %q", prompt)
+	}
+}
+
+func TestPromptSnapshotOverrideIsSentWithoutChangingBaseRecognizer(t *testing.T) {
+	imagePath := testImage(t, t.TempDir(), 20, 20)
+	var sentPrompt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		messages := body["messages"].([]any)
+		content := messages[0].(map[string]any)["content"].([]any)
+		sentPrompt = content[0].(map[string]any)["text"].(string)
+		fmt.Fprint(w, chatResponse("识别文本", "stop"))
+	}))
+	defer server.Close()
+
+	base := newTestRecognizer(t, server.URL, func(cfg *OpenAIConfig) {
+		cfg.PromptText = "A 版本提示词"
+		cfg.PromptVersion = "a"
+	})
+	overridden := base.WithPromptSnapshot("B 版本提示词", "b")
+	if _, err := overridden.RecognizePage(context.Background(), PageInput{PageID: "page", PageNo: 1, ImagePath: imagePath}); err != nil {
+		t.Fatal(err)
+	}
+	if sentPrompt != "B 版本提示词" || !strings.HasPrefix(overridden.PromptVersion(), "b#") {
+		t.Fatalf("sent prompt=%q version=%q", sentPrompt, overridden.PromptVersion())
+	}
+	if prompt, _ := base.promptText(); prompt != "A 版本提示词" {
+		t.Fatalf("base recognizer was mutated: %q", prompt)
 	}
 }

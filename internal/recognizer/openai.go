@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -27,6 +28,7 @@ type OpenAIConfig struct {
 	APIKey        string
 	Model         string
 	PromptPath    string
+	PromptText    string
 	PromptVersion string
 	Temperature   float64
 	MaxTokens     int
@@ -84,11 +86,26 @@ func (r *OpenAIRecognizer) ConfigJSON() string {
 	return string(raw)
 }
 
+func (r *OpenAIRecognizer) WithPromptSnapshot(text, version string) Recognizer {
+	cfg := r.cfg
+	cfg.PromptPath = ""
+	cfg.PromptText = text
+	cfg.PromptVersion = version
+	return NewOpenAI(cfg)
+}
+
+func (r *OpenAIRecognizer) PromptSnapshotText() string {
+	prompt, _ := r.promptText()
+	return prompt
+}
+
+func (r *OpenAIRecognizer) RetrySecret() string { return r.cfg.APIKey }
+
 // promptText loads the prompt file on every call so edits (via the settings
 // API or directly on disk) take effect without a restart; missing or empty
 // files fall back to the embedded default prompt.
 func (r *OpenAIRecognizer) promptText() (string, string) {
-	prompt := ""
+	prompt := strings.TrimSpace(r.cfg.PromptText)
 	if path := strings.TrimSpace(r.cfg.PromptPath); path != "" {
 		if raw, err := os.ReadFile(path); err == nil {
 			prompt = strings.TrimSpace(string(raw))
@@ -99,6 +116,68 @@ func (r *OpenAIRecognizer) promptText() (string, string) {
 	}
 	sum := sha256.Sum256([]byte(prompt))
 	return prompt, hex.EncodeToString(sum[:4])
+}
+
+func hashPrompt(prompt string) (string, string) {
+	prompt = strings.TrimSpace(prompt)
+	sum := sha256.Sum256([]byte(prompt))
+	return prompt, hex.EncodeToString(sum[:4])
+}
+
+func promptVersionWithHash(version, prompt string) string {
+	_, hash := hashPrompt(prompt)
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "prompt"
+	}
+	return version + "#" + hash
+}
+
+func (r *OpenAIRecognizer) MergeCandidates(ctx context.Context, input CandidateMergeInput) (CandidateMergeResult, error) {
+	if len(input.Candidates) < 2 {
+		return CandidateMergeResult{}, fmt.Errorf("at least two candidates are required")
+	}
+	if strings.TrimSpace(r.cfg.APIKey) == "" || strings.TrimSpace(r.cfg.Model) == "" {
+		return CandidateMergeResult{}, fmt.Errorf("OpenAI compatible API key and model are required")
+	}
+	var user strings.Builder
+	for index, candidate := range input.Candidates {
+		fmt.Fprintf(&user, "候选 %d：\n%s\n\n", index+1, candidate)
+	}
+	body := map[string]any{
+		"model": r.cfg.Model,
+		"messages": []map[string]any{
+			{"role": "system", "content": ConservativeMergePrompt},
+			{"role": "user", "content": strings.TrimSpace(user.String())},
+		},
+		"temperature": 0,
+	}
+	if r.cfg.MaxTokens > 0 {
+		body["max_tokens"] = r.cfg.MaxTokens
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return CandidateMergeResult{}, err
+	}
+	endpoint := strings.TrimRight(r.cfg.BaseURL, "/") + "/chat/completions"
+	var lastErr error
+	for attempt := 1; attempt <= r.cfg.RetryAttempts; attempt++ {
+		result, retryable, retryAfter, err := r.attempt(ctx, endpoint, payload)
+		if err == nil {
+			if err := ValidateConservativeMerge(result.Text, input.Candidates); err != nil {
+				return CandidateMergeResult{}, err
+			}
+			return CandidateMergeResult{Text: strings.TrimSpace(result.Text), RawResponse: result.RawJSON}, nil
+		}
+		lastErr = err
+		if !retryable || attempt == r.cfg.RetryAttempts {
+			break
+		}
+		if err := sleepBackoff(ctx, attempt, retryAfter); err != nil {
+			return CandidateMergeResult{}, err
+		}
+	}
+	return CandidateMergeResult{}, lastErr
 }
 
 func (r *OpenAIRecognizer) RecognizePage(ctx context.Context, input PageInput) (RecognitionResult, error) {
@@ -142,11 +221,12 @@ func (r *OpenAIRecognizer) RecognizePage(ctx context.Context, input PageInput) (
 	for attempt := 1; attempt <= r.cfg.RetryAttempts; attempt++ {
 		result, retryable, retryAfter, err := r.attempt(ctx, endpoint, payload)
 		if err == nil {
-			result.Metadata = map[string]any{
-				"attempts":    attempt,
-				"upload_mime": mimeType,
-				"prompt_hash": promptHash,
+			if result.Metadata == nil {
+				result.Metadata = map[string]any{}
 			}
+			result.Metadata["attempts"] = attempt
+			result.Metadata["upload_mime"] = mimeType
+			result.Metadata["prompt_hash"] = promptHash
 			return result, nil
 		}
 		lastErr = err
@@ -202,7 +282,36 @@ func (r *OpenAIRecognizer) attempt(ctx context.Context, endpoint string, payload
 	if strings.TrimSpace(text) == "" {
 		return RecognitionResult{}, true, 0, fmt.Errorf("provider returned an empty transcription")
 	}
-	return RecognitionResult{Text: text, RawJSON: raw}, false, 0, nil
+	metadata := map[string]any{}
+	if headers := auditResponseHeaders(resp.Header); len(headers) > 0 {
+		metadata["response_headers"] = headers
+	}
+	confidence, confidenceSource := extractConfidence(raw)
+	if confidenceSource != "" {
+		metadata["confidence_source"] = confidenceSource
+	}
+	return RecognitionResult{Text: text, Confidence: confidence, RawJSON: raw, Metadata: metadata}, false, 0, nil
+}
+
+// auditResponseHeaders keeps provider correlation identifiers without
+// persisting authorization, cookies, or unrelated response headers. Different
+// OpenAI-compatible providers use different names for the same concept.
+func auditResponseHeaders(header http.Header) map[string]string {
+	keys := []string{
+		"x-request-id",
+		"request-id",
+		"openai-request-id",
+		"x-trace-id",
+		"traceparent",
+		"cf-ray",
+	}
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value := strings.TrimSpace(header.Get(key)); value != "" {
+			result[key] = value
+		}
+	}
+	return result
 }
 
 // sleepBackoff waits before the next retry attempt; a variable so tests can
@@ -293,4 +402,118 @@ func extractText(raw []byte) (string, string, error) {
 		}
 	}
 	return "", "", fmt.Errorf("provider response did not include text content: %s", bodySnippet(raw))
+}
+
+// extractConfidence recognizes common OpenAI-compatible confidence shapes.
+// Providers are inconsistent here, so only explicit confidence/score fields
+// and mathematically derived token probabilities are accepted.
+func extractConfidence(raw []byte) (*float64, string) {
+	var root map[string]any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil, ""
+	}
+
+	paths := []struct {
+		name string
+		keys []string
+	}{
+		{"confidence", []string{"confidence"}},
+		{"score", []string{"score"}},
+		{"result.confidence", []string{"result", "confidence"}},
+		{"data.confidence", []string{"data", "confidence"}},
+		{"choices[0].confidence", []string{"choices", "0", "confidence"}},
+		{"choices[0].score", []string{"choices", "0", "score"}},
+		{"choices[0].message.confidence", []string{"choices", "0", "message", "confidence"}},
+	}
+	for _, path := range paths {
+		if value, ok := jsonPath(root, path.keys...); ok {
+			if confidence, ok := normalizeConfidence(value); ok {
+				return &confidence, path.name
+			}
+		}
+	}
+
+	choiceValue, ok := jsonPath(root, "choices", "0")
+	if !ok {
+		return nil, ""
+	}
+	choice, ok := choiceValue.(map[string]any)
+	if !ok {
+		return nil, ""
+	}
+	if avg, ok := numericValue(choice["avg_logprob"]); ok && avg <= 0 {
+		confidence := math.Exp(avg)
+		if !math.IsNaN(confidence) && !math.IsInf(confidence, 0) {
+			return &confidence, "choices[0].avg_logprob"
+		}
+	}
+	logprobs, _ := choice["logprobs"].(map[string]any)
+	content, _ := logprobs["content"].([]any)
+	var sum float64
+	count := 0
+	for _, item := range content {
+		entry, _ := item.(map[string]any)
+		logprob, ok := numericValue(entry["logprob"])
+		if !ok || math.IsNaN(logprob) || math.IsInf(logprob, 0) {
+			continue
+		}
+		sum += logprob
+		count++
+	}
+	if count > 0 {
+		confidence := math.Exp(sum / float64(count))
+		return &confidence, "choices[0].logprobs.content"
+	}
+	return nil, ""
+}
+
+func jsonPath(root any, keys ...string) (any, bool) {
+	current := root
+	for _, key := range keys {
+		switch value := current.(type) {
+		case map[string]any:
+			current, _ = value[key]
+		case []any:
+			index, err := strconv.Atoi(key)
+			if err != nil || index < 0 || index >= len(value) {
+				return nil, false
+			}
+			current = value[index]
+		default:
+			return nil, false
+		}
+		if current == nil {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func normalizeConfidence(value any) (float64, bool) {
+	number, ok := numericValue(value)
+	if !ok || math.IsNaN(number) || math.IsInf(number, 0) || number < 0 {
+		return 0, false
+	}
+	if number <= 1 {
+		return number, true
+	}
+	if number <= 100 {
+		return number / 100, true
+	}
+	return 0, false
+}
+
+func numericValue(value any) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number, true
+	case json.Number:
+		parsed, err := number.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(number), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
