@@ -216,6 +216,73 @@ type CandidateMergeSegment struct {
 	Text             string `json:"text"`
 }
 
+// CrossCheck runs the same pages through several recognizer profiles, compares
+// the outputs page by page, and routes disagreements to human review. It never
+// finalizes text on its own: the user has the last word.
+type CrossCheck struct {
+	ID                 string              `json:"id"`
+	DocumentID         string              `json:"document_id"`
+	JobID              string              `json:"job_id"`
+	Name               string              `json:"name"`
+	PageIDs            []string            `json:"page_ids"`
+	MergeProfileID     string              `json:"merge_profile_id,omitempty"`
+	Status             string              `json:"status"`
+	Error              string              `json:"error"`
+	ConsensusPages     int                 `json:"consensus_pages"`
+	DisagreementPages  int                 `json:"disagreement_pages"`
+	FailedPages        int                 `json:"failed_pages"`
+	CreatedAt          string              `json:"created_at"`
+	StartedAt          string              `json:"started_at"`
+	FinishedAt         string              `json:"finished_at"`
+	Variants           []CrossCheckVariant `json:"variants"`
+	Pages              []CrossCheckPage    `json:"pages,omitempty"`
+}
+
+type CrossCheckVariant struct {
+	ID                string `json:"id"`
+	CrossCheckID      string `json:"cross_check_id"`
+	Name              string `json:"name"`
+	ProfileID         string `json:"recognizer_profile_id,omitempty"`
+	ProviderAdapterID string `json:"provider_adapter_id,omitempty"`
+	PromptVersionID   string `json:"prompt_version_id,omitempty"`
+	SnapshotJSON      string `json:"-"`
+	ImageSource       string `json:"image_source"`
+	Position          int    `json:"position"`
+	Status            string `json:"status"`
+	RunID             string `json:"run_id,omitempty"`
+	Error             string `json:"error"`
+	CreatedAt         string `json:"created_at"`
+	StartedAt         string `json:"started_at"`
+	FinishedAt        string `json:"finished_at"`
+}
+
+type CrossCheckPage struct {
+	CrossCheckID       string               `json:"cross_check_id"`
+	PageID             string               `json:"page_id"`
+	PageNo             int                  `json:"page_no"`
+	Status             string               `json:"status"`
+	Agreement          *float64             `json:"agreement"`
+	ResultIDs          []string             `json:"result_ids"`
+	ConsensusVersionID string               `json:"consensus_version_id,omitempty"`
+	MergedVersionID    string               `json:"merged_version_id,omitempty"`
+	AnnotationID       string               `json:"annotation_id,omitempty"`
+	Conflicts          []CrossCheckConflict `json:"conflicts"`
+	AdoptedVersionID   string               `json:"adopted_version_id,omitempty"`
+	AdoptedAt          string               `json:"adopted_at,omitempty"`
+	Error              string               `json:"error"`
+	EffectiveKind      string               `json:"effective_kind,omitempty"`
+}
+
+// CrossCheckConflict is one line-level divergence between model outputs.
+// kind: "omitted" (dropped by the conservative merge), "partial" (kept in the
+// merge but missing from some models), "divergent" (no merge available).
+type CrossCheckConflict struct {
+	Text       string   `json:"text"`
+	Kind       string   `json:"kind"`
+	PresentIn  []string `json:"present_in"`
+	AbsentFrom []string `json:"absent_from,omitempty"`
+}
+
 type PageProcessingRun struct {
 	ID          string `json:"id"`
 	DocumentID  string `json:"document_id"`

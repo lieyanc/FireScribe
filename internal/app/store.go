@@ -1572,6 +1572,32 @@ func (s *Store) RecoverInterrupted(ctx context.Context) (int64, error) {
 	`, cause, timestamp); err != nil {
 		return 0, err
 	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE cross_check_pages
+		SET status = 'failed', error = ?
+		WHERE status = 'pending'
+		  AND cross_check_id IN (SELECT id FROM cross_checks WHERE status IN ('queued', 'running'))
+	`, cause); err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE cross_check_variants
+		SET status = 'failed', error = ?, finished_at = ?
+		WHERE status IN ('queued', 'running')
+		  AND cross_check_id IN (SELECT id FROM cross_checks WHERE status IN ('queued', 'running'))
+	`, cause, timestamp); err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE cross_checks
+		SET status = 'failed', error = ?, finished_at = ?,
+		    consensus_pages = (SELECT COUNT(*) FROM cross_check_pages cp WHERE cp.cross_check_id = cross_checks.id AND cp.status = 'consensus'),
+		    disagreement_pages = (SELECT COUNT(*) FROM cross_check_pages cp WHERE cp.cross_check_id = cross_checks.id AND cp.status = 'disagreement'),
+		    failed_pages = (SELECT COUNT(*) FROM cross_check_pages cp WHERE cp.cross_check_id = cross_checks.id AND cp.status IN ('failed', 'canceled'))
+		WHERE status IN ('queued', 'running')
+	`, cause, timestamp); err != nil {
+		return 0, err
+	}
 
 	jobTx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

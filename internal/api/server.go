@@ -120,6 +120,8 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/documents/{documentID}/recognition-runs", s.listRecognitionRuns)
 		r.Post("/documents/{documentID}/recognition-experiments", s.createRecognitionExperiment)
 		r.Get("/documents/{documentID}/recognition-experiments", s.listRecognitionExperiments)
+		r.Post("/documents/{documentID}/cross-checks", s.createCrossCheck)
+		r.Get("/documents/{documentID}/cross-checks", s.listCrossChecks)
 		r.Get("/documents/{documentID}/final-text", s.finalText)
 		r.Post("/documents/{documentID}/exports", s.exportDocument)
 		r.Get("/documents/{documentID}/exports", s.listDocumentExports)
@@ -131,6 +133,7 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/pages/{pageID}/thumbnail", s.pageThumbnail)
 		r.Get("/pages/{pageID}/processing-preview", s.pageProcessingPreview)
 		r.Get("/pages/{pageID}/recognition-results", s.listRecognitionResults)
+		r.Get("/pages/{pageID}/cross-check", s.getPageCrossCheck)
 		r.Post("/pages/{pageID}/candidate-merges", s.mergeRecognitionCandidates)
 		r.Get("/pages/{pageID}/text-versions", s.listTextVersions)
 		r.Post("/pages/{pageID}/text-versions", s.createTextVersion)
@@ -143,6 +146,8 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/recognition-runs/{runID}/cancel", s.cancelRun)
 		r.Get("/recognition-experiments/{experimentID}", s.getRecognitionExperiment)
 		r.Post("/recognition-experiments/{experimentID}/winner", s.selectRecognitionExperimentWinner)
+		r.Get("/cross-checks/{checkID}", s.getCrossCheck)
+		r.Post("/cross-checks/{checkID}/adopt", s.adoptCrossCheck)
 		r.Get("/page-processing-runs/{runID}", s.getPageProcessingRun)
 		r.Get("/page-processing-runs/{runID}/results", s.listPageProcessingResults)
 		r.Get("/settings", s.getSettings)
@@ -951,7 +956,7 @@ func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	if errors.Is(err, sql.ErrNoRows) {
 		status = http.StatusNotFound
-	} else if errors.Is(err, app.ErrRecognitionActive) || errors.Is(err, app.ErrPageProcessingActive) || errors.Is(err, app.ErrAuthorTermExists) {
+	} else if errors.Is(err, app.ErrRecognitionActive) || errors.Is(err, app.ErrCrossCheckActive) || errors.Is(err, app.ErrPageProcessingActive) || errors.Is(err, app.ErrAuthorTermExists) {
 		status = http.StatusConflict
 	} else {
 		message := strings.ToLower(err.Error())
@@ -961,7 +966,9 @@ func writeError(w http.ResponseWriter, err error) {
 		if strings.Contains(message, "unsupported") || strings.Contains(message, "required") || strings.Contains(message, "parse") ||
 			strings.Contains(message, "must") || strings.Contains(message, "between") || strings.Contains(message, "does not belong") ||
 			strings.Contains(message, "duplicate") || strings.Contains(message, "mutually exclusive") || strings.Contains(message, "disabled") ||
-			strings.Contains(message, "nothing to retry") || strings.Contains(message, "not active") || strings.Contains(message, "still active") {
+			strings.Contains(message, "nothing to retry") || strings.Contains(message, "not active") || strings.Contains(message, "still active") ||
+			strings.Contains(message, "selects both") || strings.Contains(message, "no pages") ||
+			strings.Contains(message, "distinct names") || strings.Contains(message, "does not support") {
 			status = http.StatusBadRequest
 		}
 	}

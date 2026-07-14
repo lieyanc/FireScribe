@@ -39,8 +39,11 @@ type App struct {
 	runMu      sync.Mutex
 	activeRuns map[string]*runHandle // document ID → active run
 	runsByID   map[string]*runHandle
-	jobMu      sync.Mutex
-	activeJobs map[string]context.CancelCauseFunc
+	// document ID → active cross-check ID; held for the whole cross-check job
+	// so recognition runs cannot steal the document between variants.
+	activeCrossChecks map[string]string
+	jobMu             sync.Mutex
+	activeJobs        map[string]context.CancelCauseFunc
 
 	baseCtx context.Context
 	stop    context.CancelCauseFunc
@@ -107,16 +110,17 @@ func New(store *Store, files *storage.Storage, rec recognizer.Recognizer) *App {
 	}
 	baseCtx, stop := context.WithCancelCause(context.Background())
 	return &App{
-		Store:      store,
-		Storage:    files,
-		rec:        rec,
-		registry:   recognizer.NewRegistry(),
-		options:    Options{PDFRenderDPI: 200},
-		activeRuns: map[string]*runHandle{},
-		runsByID:   map[string]*runHandle{},
-		activeJobs: map[string]context.CancelCauseFunc{},
-		baseCtx:    baseCtx,
-		stop:       stop,
+		Store:             store,
+		Storage:           files,
+		rec:               rec,
+		registry:          recognizer.NewRegistry(),
+		options:           Options{PDFRenderDPI: 200},
+		activeRuns:        map[string]*runHandle{},
+		runsByID:          map[string]*runHandle{},
+		activeCrossChecks: map[string]string{},
+		activeJobs:        map[string]context.CancelCauseFunc{},
+		baseCtx:           baseCtx,
+		stop:              stop,
 	}
 }
 
@@ -130,6 +134,9 @@ type RecognitionOptions struct {
 	preparedSnapshotJSON string
 	preparedRun          RecognitionRun
 	experimentVariantID  string
+	// crossCheckID lets a cross-check job start runs on a document it has
+	// reserved; all other callers are rejected while the reservation is held.
+	crossCheckID string
 }
 
 // SetRecognizer swaps the recognizer used by future runs (settings changes).
@@ -485,6 +492,8 @@ func (a *App) executeJob(ctx context.Context, jobID string) {
 		result, err = a.runPageProcessingJob(ctx, job)
 	case "recognition_experiment":
 		result, err = a.runRecognitionExperimentJob(ctx, job)
+	case "cross_check":
+		result, err = a.runCrossCheckJob(ctx, job)
 	default:
 		err = fmt.Errorf("unsupported background job type %q", job.Type)
 	}
@@ -664,6 +673,9 @@ func (a *App) StartRecognitionWithOptions(ctx context.Context, documentID string
 	defer a.runMu.Unlock()
 	if _, active := a.activeRuns[documentID]; active {
 		return RecognitionStart{}, ErrRecognitionActive
+	}
+	if reserved := a.activeCrossChecks[documentID]; reserved != "" && reserved != options.crossCheckID {
+		return RecognitionStart{}, ErrCrossCheckActive
 	}
 	// A queued/running run without an in-process worker is a leftover this
 	// process cannot finish; fail it so its pages become retryable.
@@ -1056,6 +1068,17 @@ func (a *App) CancelJob(ctx context.Context, jobID string) error {
 				}
 				_ = a.Store.FinishRecognitionExperiment(context.Background(), experiment.ID, "canceled", "canceled by user")
 			}
+		} else if job.Type == "cross_check" {
+			if check, checkErr := a.Store.CrossCheckByJobID(context.Background(), job.ID); checkErr == nil {
+				for _, variant := range check.Variants {
+					if variant.RunID != "" {
+						_ = a.CancelRun(context.Background(), variant.RunID)
+					}
+				}
+				_, _ = a.Store.CancelPendingCrossCheckPages(context.Background(), check.ID, "canceled by user")
+				_ = a.Store.CancelPendingCrossCheckVariants(context.Background(), check.ID, "canceled by user")
+				_, _ = a.Store.CancelCrossCheck(context.Background(), check.ID, "canceled by user")
+			}
 		}
 	}
 	return a.Store.MarkJobCanceled(ctx, jobID)
@@ -1092,6 +1115,18 @@ func (a *App) RetryJob(ctx context.Context, jobID string) (JobRetryResult, error
 			return JobRetryResult{}, err
 		}
 		queued, err := a.Store.RequeueRecognitionExperimentJob(ctx, job.ID, experiment.ID)
+		if err != nil {
+			return JobRetryResult{}, err
+		}
+		a.launchJob(jobID)
+		return JobRetryResult{Job: queued}, nil
+	}
+	if job.Type == "cross_check" {
+		check, err := a.Store.CrossCheckByJobID(ctx, job.ID)
+		if err != nil {
+			return JobRetryResult{}, err
+		}
+		queued, err := a.Store.RequeueCrossCheckJob(ctx, job.ID, check.ID)
 		if err != nil {
 			return JobRetryResult{}, err
 		}
@@ -1154,6 +1189,13 @@ func (a *App) SaveTextVersion(ctx context.Context, version TextVersion) (TextVer
 		_ = a.Store.UpdatePageStatus(ctx, version.PageID, "verified")
 	} else if version.Kind == "manual" {
 		_ = a.Store.UpdatePageStatus(ctx, version.PageID, "reviewing")
+	}
+	// Finalizing a page is the reviewer's sign-off: any open machine-generated
+	// cross-check disagreement note is decided by it and must leave the queue.
+	if version.Kind == "final" && version.PageID != "" {
+		if err := a.Store.ResolveCrossCheckAnnotations(ctx, version.PageID); err != nil {
+			log.Printf("resolve cross-check annotations for page %s: %v", version.PageID, err)
+		}
 	}
 	_ = a.Store.RecomputeDocumentStatus(ctx, version.DocumentID)
 	return version, nil
