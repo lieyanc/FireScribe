@@ -80,7 +80,7 @@ export function ReviewQueuePage() {
                     </Link>
                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>识别 {item.recognition_count} 次</span>
-                      {item.open_uncertain_count > 0 ? <span className="text-warning">存疑 {item.open_uncertain_count} 项</span> : null}
+                      {item.open_uncertain_count > 0 ? <span className="text-warning-text">存疑 {item.open_uncertain_count} 项</span> : null}
                     </div>
                     {item.low_confidence_segments.length ? (
                       <div className="mt-2 flex flex-col gap-1.5">
@@ -90,7 +90,7 @@ export function ReviewQueuePage() {
                             className="flex max-w-xl items-center gap-2 rounded-md border bg-muted/30 px-2 py-1 text-xs hover:border-primary/50 hover:bg-muted"
                             to={`/review/${item.document_id}/${item.page_id}?focus_start=${segment.start}&focus_end=${segment.end}`}
                           >
-                            <span className="shrink-0 tabular-nums text-warning">{Math.round(segment.confidence * 100)}%</span>
+                            <span className="shrink-0 tabular-nums text-warning-text">{Math.round(segment.confidence * 100)}%</span>
                             <span className="truncate">{segment.text.replace(/\s+/g, " ") || "空白片段"}</span>
                             <span className="ml-auto shrink-0 text-muted-foreground">{segmentLevelLabel(segment.level)}</span>
                           </Link>

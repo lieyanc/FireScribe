@@ -48,6 +48,7 @@ export default {
         warning: {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
+          text: "hsl(var(--warning-text))",
         },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",

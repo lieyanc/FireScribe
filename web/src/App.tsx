@@ -167,8 +167,14 @@ function AppShell({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =>
           <Separator orientation="vertical" className="h-4" />
           <RouteBreadcrumb pathname={pathname} />
         </header>
-        <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-5 md:px-6 md:py-6">
-          <Suspense fallback={<div className="flex min-h-[50vh] items-center justify-center text-sm text-muted-foreground">正在加载页面…</div>}>
+        <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-5 md:px-6 md:py-6 [view-transition-name:main-content]">
+          <Suspense
+            fallback={
+              <div className="flex min-h-[50vh] items-center justify-center text-sm text-muted-foreground animate-in fade-in duration-300 delay-150 fill-mode-backwards">
+                正在加载页面…
+              </div>
+            }
+          >
             <Routes>
               <Route path="/" element={<DocumentsPage />} />
               <Route path="/documents/:documentID" element={<DocumentDetailPage />} />
@@ -203,6 +209,7 @@ function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; them
             <SidebarMenuButton asChild size="lg" tooltip="FireScribe 文档库">
               <Link
                 to="/"
+                viewTransition
                 aria-label="返回文档库"
                 onClick={() => {
                   if (isMobile) setOpenMobile(false);
@@ -274,6 +281,7 @@ function AppNavigationItem({ item, pathname }: { item: NavigationItem; pathname:
       <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
         <Link
           to={item.to}
+          viewTransition
           aria-current={active ? "page" : undefined}
           onClick={() => {
             if (isMobile) setOpenMobile(false);

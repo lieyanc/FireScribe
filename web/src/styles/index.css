@@ -11,8 +11,8 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 204.3 99.2% 46.9%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
@@ -21,57 +21,59 @@
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --success: 153 60% 34%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 24 10% 10%;
+    --success: 142.1 76.2% 36.3%;
+    --success-foreground: 355.7 100% 97.3%;
+    --warning: 32.2 95% 44%;
+    --warning-foreground: 26 83.3% 14.1%;
+    --warning-text: 32.2 95% 33%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 204.3 99.2% 46.9%;
+    --ring: 221.2 83.2% 53.3%;
     --radius: 0.5rem;
     --sidebar-background: 210 40% 98%;
     --sidebar-foreground: 222.2 47.4% 11.2%;
-    --sidebar-primary: 204.3 99.2% 46.9%;
-    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-primary: 221.2 83.2% 53.3%;
+    --sidebar-primary-foreground: 210 40% 98%;
     --sidebar-accent: 210 40% 96.1%;
     --sidebar-accent-foreground: 222.2 47.4% 11.2%;
     --sidebar-border: 214.3 31.8% 91.4%;
-    --sidebar-ring: 204.3 99.2% 46.9%;
+    --sidebar-ring: 221.2 83.2% 53.3%;
   }
 
   .dark {
     color-scheme: dark;
-    --background: 222.2 47.4% 7.5%;
+    --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
-    --card: 222.2 47.4% 10.5%;
+    --card: 222.2 84% 4.9%;
     --card-foreground: 210 40% 98%;
-    --popover: 222.2 47.4% 10.5%;
+    --popover: 222.2 84% 4.9%;
     --popover-foreground: 210 40% 98%;
-    --primary: 204.3 99.2% 46.9%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
     --secondary: 217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
     --muted: 217.2 32.6% 17.5%;
     --muted-foreground: 215 20.2% 65.1%;
     --accent: 217.2 32.6% 17.5%;
     --accent-foreground: 210 40% 98%;
-    --destructive: 0 72.2% 50.6%;
+    --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --success: 153 55% 42%;
-    --success-foreground: 0 0% 100%;
+    --success: 142.1 70.6% 45.3%;
+    --success-foreground: 144.9 80.4% 10%;
     --warning: 43 96% 56%;
-    --warning-foreground: 24 10% 10%;
+    --warning-foreground: 222.2 47.4% 11.2%;
+    --warning-text: 43 96% 56%;
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
-    --ring: 204.3 99.2% 46.9%;
-    --sidebar-background: 222.2 47.4% 8.5%;
-    --sidebar-foreground: 210 40% 94%;
-    --sidebar-primary: 204.3 99.2% 46.9%;
-    --sidebar-primary-foreground: 0 0% 100%;
+    --ring: 224.3 76.3% 48%;
+    --sidebar-background: 222.2 47.4% 9%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217.2 91.2% 59.8%;
+    --sidebar-primary-foreground: 222.2 47.4% 11.2%;
     --sidebar-accent: 217.2 32.6% 17.5%;
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 217.2 32.6% 17.5%;
-    --sidebar-ring: 204.3 99.2% 46.9%;
+    --sidebar-ring: 224.3 76.3% 48%;
   }
 }
 
@@ -103,5 +105,54 @@
   input[type="file"]::file-selector-button {
     border-radius: calc(var(--radius) - 4px);
     color: hsl(var(--foreground));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 180ms;
+    animation-timing-function: ease-out;
+  }
+
+  ::view-transition-old(main-content) {
+    animation: 150ms ease-out both view-transition-fade-out;
+  }
+
+  ::view-transition-new(main-content) {
+    animation: 180ms ease-out both view-transition-fade-in;
+  }
+}
+
+@keyframes view-transition-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes view-transition-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
