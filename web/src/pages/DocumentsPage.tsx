@@ -1,12 +1,12 @@
-import { FormEvent, MouseEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowUpRight, BookOpenText, CheckCircle2, Clock3, FileSearch, FileText, Search, Upload, X } from "lucide-react";
+import { ArrowUpRight, BookOpenText, CheckCircle2, Clock3, FileSearch, FileText, FolderOpen, Search, Upload, X } from "lucide-react";
 import { EmptyState, ErrorMessage, IconTooltipButton, MetricCard, PageHeader } from "../components/app/chrome";
+import { StatusBadge } from "../components/app/status-badge";
 import { TagChips } from "../components/app/tags";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -15,10 +15,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { Spinner } from "../components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { importDocument, listDocuments, listTags, searchText } from "../lib/api";
@@ -26,7 +28,10 @@ import { formatBytes, formatTime } from "../lib/utils";
 
 const statusOptions = [
   { value: "all", label: "全部状态" },
+  { value: "new", label: "新建" },
+  { value: "importing", label: "导入中" },
   { value: "ready", label: "就绪" },
+  { value: "review_pending", label: "待校对" },
   { value: "recognizing", label: "识别中" },
   { value: "reviewing", label: "校对中" },
   { value: "finalized", label: "已定稿" },
@@ -63,16 +68,18 @@ export function DocumentsPage() {
   const docs = documents.data ?? [];
   const totalPages = docs.reduce((sum, doc) => sum + doc.page_count, 0);
   const finalizedCount = docs.filter((doc) => doc.status === "finalized").length;
-  const activeCount = docs.filter((doc) => ["importing", "recognizing", "reviewing"].includes(doc.status)).length;
+  const activeCount = docs.filter((doc) => ["importing", "recognizing", "review_pending", "reviewing"].includes(doc.status)).length;
   const loading = documents.isLoading;
+  const hasFilters = Boolean(query.trim() || status || tag);
 
-  function openDocumentFromRow(event: MouseEvent<HTMLTableRowElement>, id: string) {
-    if ((event.target as HTMLElement).closest("a,button")) return;
-    navigate(`/documents/${id}`);
+  function clearFilters() {
+    setQuery("");
+    setStatus("");
+    setTag("");
   }
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title="文档库"
         description={`${loading ? "正在同步" : `${docs.length} 份文档`} · ${totalPages} 页`}
@@ -82,43 +89,54 @@ export function DocumentsPage() {
 
       <section className="grid gap-3 md:grid-cols-3">
         <MetricCard
-          icon={<BookOpenText className="size-4" />}
+          icon={<BookOpenText />}
           label="当前列表"
           value={loading ? <Skeleton className="h-5 w-10" /> : docs.length}
         />
         <MetricCard
-          icon={<FileText className="size-4" />}
+          icon={<FileText />}
           label="页面"
           value={loading ? <Skeleton className="h-5 w-10" /> : totalPages}
         />
         <MetricCard
-          icon={<CheckCircle2 className="size-4" />}
+          icon={<CheckCircle2 />}
           label="已定稿"
           value={loading ? <Skeleton className="h-5 w-10" /> : finalizedCount}
           hint={loading ? undefined : activeCount ? `${activeCount} 项处理中` : "无处理项"}
         />
       </section>
 
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="搜索标题、作者、来源或全文"
+      <div className="flex flex-col gap-2 lg:flex-row">
+        <InputGroup className="min-w-0 flex-1">
+          <InputGroupAddon>
+            <Search />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="搜索文档与全文"
+            placeholder="搜索标题、作者、来源或全文内容"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-        </div>
+          {query ? (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton size="icon-xs" aria-label="清除搜索" onClick={() => setQuery("")}>
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          ) : null}
+        </InputGroup>
         <Select value={status || "all"} onValueChange={(value) => setStatus(value === "all" ? "" : value)}>
           <SelectTrigger aria-label="状态筛选" className="sm:w-40">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {statusOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              {statusOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
         <Select value={tag || "all"} onValueChange={(value) => setTag(value === "all" ? "" : value)}>
@@ -126,20 +144,36 @@ export function DocumentsPage() {
             <SelectValue placeholder="标签" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部标签</SelectItem>
-            {(tags.data ?? []).map((item) => (
-              <SelectItem key={item.id} value={item.name}>
-                {item.name}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectItem value="all">全部标签</SelectItem>
+              {(tags.data ?? []).map((item) => (
+                <SelectItem key={item.id} value={item.name}>
+                  {item.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
+        {hasFilters ? (
+          <Button type="button" variant="ghost" onClick={clearFilters}>
+            <X data-icon="inline-start" />
+            清除筛选
+          </Button>
+        ) : null}
       </div>
 
-      <ErrorMessage message={documents.error?.message} />
+      <ErrorMessage message={documents.error?.message} title="文档列表加载失败" onRetry={() => void documents.refetch()} />
+      <ErrorMessage message={tags.error?.message} title="标签加载失败" onRetry={() => void tags.refetch()} />
 
       <Card>
-        <Table>
+        <CardHeader>
+          <CardTitle>文档列表</CardTitle>
+          <CardDescription>
+            {hasFilters ? `当前筛选得到 ${docs.length} 份文档。` : "点击任意文档继续识别、校对或导出。"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
           <TableHeader>
             <TableRow>
               <TableHead>标题</TableHead>
@@ -174,8 +208,7 @@ export function DocumentsPage() {
               docs.map((doc) => (
                 <TableRow
                   key={doc.id}
-                  className="cursor-pointer transition-colors hover:bg-muted/50"
-                  onClick={(event) => openDocumentFromRow(event, doc.id)}
+                  className="transition-colors hover:bg-muted/50"
                 >
                   <TableCell className="w-full max-w-0 overflow-hidden">
                     <Link to={`/documents/${doc.id}`} className="block truncate font-medium hover:text-primary">
@@ -188,7 +221,7 @@ export function DocumentsPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge value={doc.status} />
+                    <StatusBadge value={doc.status} />
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground sm:table-cell">{doc.page_count}</TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">{formatTime(doc.updated_at)}</TableCell>
@@ -199,7 +232,7 @@ export function DocumentsPage() {
                       size="icon-sm"
                       onClick={() => navigate(`/documents/${doc.id}`)}
                     >
-                      <ArrowUpRight className="size-4" />
+                      <ArrowUpRight />
                     </IconTooltipButton>
                   </TableCell>
                 </TableRow>
@@ -208,28 +241,38 @@ export function DocumentsPage() {
               <TableRow>
                 <TableCell colSpan={5}>
                   <EmptyState
-                    icon={<FileText className="size-5" />}
-                    title="暂无文档"
-                    description="导入文档后会出现在这里。"
-                  />
+                    icon={hasFilters ? <FileSearch /> : <FileText />}
+                    title={hasFilters ? "没有符合条件的文档" : "从第一份文档开始"}
+                    description={hasFilters ? "尝试调整搜索词、状态或标签。" : "导入 PDF、单张图片或整个图片文件夹。"}
+                  >
+                    {hasFilters ? (
+                      <Button type="button" variant="outline" onClick={clearFilters}>清除筛选</Button>
+                    ) : (
+                      <ImportDocumentDialog label="导入第一份文档" />
+                    )}
+                  </EmptyState>
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
-        </Table>
+          </Table>
+        </CardContent>
       </Card>
 
       {debouncedQuery.trim() ? (
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <FileSearch className="size-4" />
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 [&_svg]:size-4">
+              <FileSearch />
               全文结果
             </CardTitle>
+            <CardDescription>在已保存的识别稿和定稿中查找“{debouncedQuery.trim()}”。</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {searchResults.isLoading ? (
-              <div className="space-y-2">
+          <CardContent className="flex flex-col gap-2">
+            {searchResults.error ? (
+              <ErrorMessage message={searchResults.error.message} title="全文搜索失败" onRetry={() => void searchResults.refetch()} />
+            ) : searchResults.isLoading ? (
+              <div className="flex flex-col gap-2">
                 {Array.from({ length: 2 }, (_, index) => (
                   <div key={index} className="rounded-md border px-3 py-2 shadow-sm">
                     <Skeleton className="h-4 w-48" />
@@ -251,7 +294,7 @@ export function DocumentsPage() {
                 </Link>
               ))
             ) : (
-              <EmptyState icon={<FileSearch className="size-5" />} title="无匹配" className="min-h-32" />
+              <EmptyState icon={<FileSearch />} title="全文中没有匹配内容" description="可以尝试更短或更常见的关键词。" className="min-h-32" />
             )}
           </CardContent>
         </Card>
@@ -260,7 +303,7 @@ export function DocumentsPage() {
   );
 }
 
-function ImportDocumentDialog() {
+function ImportDocumentDialog({ label = "导入文档" }: { label?: string }) {
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [fileKey, setFileKey] = useState(0);
@@ -268,6 +311,7 @@ function ImportDocumentDialog() {
   const [author, setAuthor] = useState("");
   const [source, setSource] = useState("");
   const [description, setDescription] = useState("");
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -308,10 +352,11 @@ function ImportDocumentDialog() {
     setFiles((prev) => {
       const next = [...prev];
       for (const file of list) {
-        if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) {
+        if (!next.some((item) => fileIdentity(item) === fileIdentity(file))) {
           next.push(file);
         }
       }
+      next.sort((a, b) => fileSortKey(a).localeCompare(fileSortKey(b), undefined, { numeric: true, sensitivity: "base" }));
       if (!title.trim() && next[0]) {
         setTitle(next[0].name.replace(/\.[^.]+$/, ""));
       }
@@ -327,8 +372,8 @@ function ImportDocumentDialog() {
   return (
     <>
       <Button onClick={() => setOpen(true)}>
-        <Upload className="size-4" />
-        导入文档
+        <Upload data-icon="inline-start" />
+        {label}
       </Button>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
@@ -338,19 +383,40 @@ function ImportDocumentDialog() {
               上传一个或多个 PDF 或图片,按上传顺序合并为同一文档;每张图片为一页,PDF 会自动拆分为多页。
             </DialogDescription>
           </DialogHeader>
-          <form className="space-y-4" onSubmit={submitUpload}>
-            <div className="grid gap-2">
-              <Label htmlFor="document-file">文件</Label>
+          <form className="flex flex-col gap-4" onSubmit={submitUpload}>
+            <FieldGroup>
+              <Field data-invalid={upload.isError && !files.length ? true : undefined}>
+              <FieldLabel htmlFor="document-file">文件</FieldLabel>
               <Input
                 key={fileKey}
                 id="document-file"
                 type="file"
                 multiple
                 accept="application/pdf,image/*,.tif,.tiff,.bmp"
+                aria-invalid={upload.isError && !files.length ? true : undefined}
                 onChange={(event) => addFiles(event.target.files)}
               />
+              <input
+                ref={(node) => {
+                  folderInputRef.current = node;
+                  node?.setAttribute("webkitdirectory", "");
+                  node?.setAttribute("directory", "");
+                }}
+                type="file"
+                accept="image/*,.tif,.tiff,.bmp"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  addFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <Button type="button" variant="outline" className="w-fit" disabled={upload.isPending} onClick={() => folderInputRef.current?.click()}>
+                <FolderOpen data-icon="inline-start" />
+                选择图片文件夹
+              </Button>
               {files.length ? (
-                <ul className="mt-1 space-y-1.5 rounded-md border bg-muted/30 p-2">
+                <ul className="mt-1 flex flex-col gap-1.5 rounded-md border bg-muted/30 p-2">
                   {files.map((file, index) => (
                     <li key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center gap-2 text-sm">
                       <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-xs tabular-nums text-muted-foreground">
@@ -361,50 +427,54 @@ function ImportDocumentDialog() {
                         {file.name}
                       </span>
                       <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(file.size)}</span>
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon-sm"
                         aria-label={`移除 ${file.name}`}
-                        className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
                         disabled={upload.isPending}
                         onClick={() => removeFile(index)}
                       >
-                        <X className="size-4" />
-                      </button>
+                        <X />
+                      </Button>
                     </li>
                   ))}
                 </ul>
-              ) : null}
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="document-title">标题</Label>
+              ) : (
+                <FieldDescription>支持 PDF、常见图片格式和图片文件夹；多个文件会按名称自然排序后合并。</FieldDescription>
+              )}
+              </Field>
+              <Field>
+              <FieldLabel htmlFor="document-title">标题</FieldLabel>
               <Input id="document-title" value={title} onChange={(event) => setTitle(event.target.value)} />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="document-author">作者</Label>
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field>
+                <FieldLabel htmlFor="document-author">作者</FieldLabel>
                 <Input id="document-author" value={author} onChange={(event) => setAuthor(event.target.value)} />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="document-source">来源</Label>
+                </Field>
+                <Field>
+                <FieldLabel htmlFor="document-source">来源</FieldLabel>
                 <Input id="document-source" value={source} onChange={(event) => setSource(event.target.value)} />
+                </Field>
               </div>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="document-description">描述</Label>
+              <Field>
+              <FieldLabel htmlFor="document-description">描述</FieldLabel>
               <Textarea
                 id="document-description"
                 className="min-h-20"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
               />
-            </div>
+              </Field>
+            </FieldGroup>
             <ErrorMessage message={upload.error?.message} />
             <DialogFooter>
               <Button type="button" variant="outline" disabled={upload.isPending} onClick={() => onOpenChange(false)}>
                 取消
               </Button>
               <Button type="submit" disabled={!files.length || upload.isPending}>
-                <Upload className="size-4" />
+                {upload.isPending ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
                 {upload.isPending ? "导入中" : files.length > 1 ? `导入 ${files.length} 个文件` : "导入"}
               </Button>
             </DialogFooter>
@@ -413,4 +483,12 @@ function ImportDocumentDialog() {
       </Dialog>
     </>
   );
+}
+
+function fileSortKey(file: File) {
+  return file.webkitRelativePath || file.name;
+}
+
+function fileIdentity(file: File) {
+  return `${fileSortKey(file)}\u0000${file.size}\u0000${file.lastModified}`;
 }

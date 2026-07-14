@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Ban,
-  ChevronDown,
   Download,
   FileText,
   FileType,
@@ -15,10 +14,25 @@ import {
   RefreshCw,
   RotateCcw,
   RotateCw,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { EmptyState, ErrorMessage, IconTooltipButton, MetricCard, PageHeader } from "../components/app/chrome";
+import { StatusBadge } from "../components/app/status-badge";
+import { PageProcessingCard } from "../components/app/page-processing-card";
+import { RecognitionExperimentsCard } from "../components/app/recognition-experiments-card";
+import { ExportHistoryCard } from "../components/app/export-history-card";
 import { TagChips, TagEditor } from "../components/app/tags";
-import { Badge } from "../components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -29,26 +43,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Switch } from "../components/ui/switch";
 import { Progress } from "../components/ui/progress";
 import { Skeleton } from "../components/ui/skeleton";
+import { Spinner } from "../components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { toast } from "../components/ui/toaster";
 import {
   cancelRun,
+  deleteDocument,
   exportDocument,
   getDocument,
   listDocumentAssets,
   listPages,
+  listPromptVersions,
+  listProviderAdapters,
+  listRecognizerProfiles,
   listRecognitionRuns,
   listRunPages,
   patchDocument,
@@ -59,27 +73,9 @@ import {
   type DocumentAsset,
   type RecognitionRun,
 } from "../lib/api";
-import { cn, formatBytes, formatTime } from "../lib/utils";
+import { formatBytes, formatTime } from "../lib/utils";
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
-
-const RUN_STATUS_META: Record<string, { label: string; tone: string }> = {
-  queued: { label: "排队中", tone: "border-accent bg-accent text-accent-foreground" },
-  running: { label: "识别中", tone: "border-accent bg-accent text-accent-foreground" },
-  succeeded: { label: "已完成", tone: "border-primary/25 bg-primary/10 text-primary" },
-  partial: { label: "部分失败", tone: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400" },
-  failed: { label: "失败", tone: "border-destructive/20 bg-destructive/10 text-destructive" },
-  canceled: { label: "已取消", tone: "border-destructive/20 bg-destructive/10 text-destructive" },
-};
-
-function RunStatusBadge({ status }: { status: string }) {
-  const meta = RUN_STATUS_META[status] ?? { label: status, tone: "border-transparent bg-secondary text-secondary-foreground" };
-  return (
-    <span className={cn("inline-flex h-6 items-center rounded-md border px-2.5 text-xs font-semibold", meta.tone)}>
-      {meta.label}
-    </span>
-  );
-}
 
 const ASSET_ROLE_LABELS: Record<string, string> = {
   original: "原件",
@@ -102,7 +98,7 @@ function assetFileName(asset: DocumentAsset) {
 
 function InfoField({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="min-w-0 space-y-1">
+    <div className="flex min-w-0 flex-col gap-1">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="truncate text-sm" title={value || undefined}>
         {value || "--"}
@@ -128,7 +124,9 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
       queryClient.invalidateQueries({ queryKey: ["document", documentID] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       setOpen(false);
+      toast.success("文档信息已保存");
     },
+    onError: (error: Error) => toast.error("保存失败", { description: error.message }),
   });
 
   function onOpenChange(next: boolean) {
@@ -150,17 +148,17 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="inline-flex items-center gap-2 text-base">
-          <Info className="size-4 text-muted-foreground" />
+      <CardHeader className="flex-row items-center justify-between pb-3">
+        <CardTitle className="inline-flex items-center gap-2 text-base [&_svg]:size-4">
+          <Info />
           文档信息
         </CardTitle>
         <Button variant="outline" size="sm" disabled={!doc} onClick={() => onOpenChange(true)}>
-          <Pencil className="size-4" />
+          <Pencil data-icon="inline-start" />
           编辑
         </Button>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-4">
         {doc ? (
           <>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -169,13 +167,13 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
               <InfoField label="创建时间" value={formatTime(doc.created_at)} />
               <InfoField label="更新时间" value={formatTime(doc.updated_at)} />
             </div>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               <div className="text-xs text-muted-foreground">描述</div>
               <div className="whitespace-pre-wrap text-sm">{doc.description || "--"}</div>
             </div>
           </>
         ) : (
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3">
             <Skeleton className="h-4 w-3/4" />
             <Skeleton className="h-4 w-1/2" />
             <Skeleton className="h-4 w-2/3" />
@@ -190,41 +188,49 @@ function DocumentInfoCard({ documentID, doc }: { documentID: string; doc?: Docum
             <DialogDescription>修改标题、作者、来源与描述。</DialogDescription>
           </DialogHeader>
           <form
-            className="space-y-4"
+            className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
               patchMutation.mutate(form);
             }}
           >
-            <div className="space-y-1.5">
-              <Label htmlFor="doc-title">标题</Label>
-              <Input id="doc-title" value={form.title} onChange={(event) => setField("title", event.target.value)} />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="doc-author">作者</Label>
-                <Input id="doc-author" value={form.author} onChange={(event) => setField("author", event.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="doc-source">来源</Label>
-                <Input id="doc-source" value={form.source} onChange={(event) => setField("source", event.target.value)} />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="doc-description">描述</Label>
-              <Textarea
-                id="doc-description"
-                rows={3}
-                value={form.description}
-                onChange={(event) => setField("description", event.target.value)}
-              />
-            </div>
+            <FieldGroup className="gap-4">
+              <Field>
+                <FieldLabel htmlFor="doc-title">标题</FieldLabel>
+                <Input
+                  id="doc-title"
+                  required
+                  value={form.title}
+                  onChange={(event) => setField("title", event.target.value)}
+                />
+              </Field>
+              <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="doc-author">作者</FieldLabel>
+                  <Input id="doc-author" value={form.author} onChange={(event) => setField("author", event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="doc-source">来源</FieldLabel>
+                  <Input id="doc-source" value={form.source} onChange={(event) => setField("source", event.target.value)} />
+                </Field>
+              </FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="doc-description">描述</FieldLabel>
+                <Textarea
+                  id="doc-description"
+                  rows={3}
+                  value={form.description}
+                  onChange={(event) => setField("description", event.target.value)}
+                />
+              </Field>
+            </FieldGroup>
             <ErrorMessage message={patchMutation.error?.message} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 取消
               </Button>
               <Button type="submit" disabled={patchMutation.isPending || !form.title.trim()}>
+                {patchMutation.isPending ? <Spinner data-icon="inline-start" /> : <Pencil data-icon="inline-start" />}
                 {patchMutation.isPending ? "保存中" : "保存"}
               </Button>
             </DialogFooter>
@@ -249,9 +255,9 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="inline-flex items-center gap-2 text-base">
-          <Paperclip className="size-4 text-muted-foreground" />
+      <CardHeader className="flex-row items-center justify-between pb-3">
+        <CardTitle className="inline-flex items-center gap-2 text-base [&_svg]:size-4">
+          <Paperclip />
           文件
         </CardTitle>
         {hiddenCount > 0 ? (
@@ -261,8 +267,19 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
         ) : null}
       </CardHeader>
       <CardContent className="p-0">
-        <ErrorMessage message={assets.error?.message} />
-        {items.length ? (
+        {assets.isError ? (
+          <EmptyState
+            icon={<Paperclip />}
+            title="文件加载失败"
+            description={assets.error.message}
+            className="min-h-40"
+          >
+            <Button variant="outline" size="sm" onClick={() => void assets.refetch()} disabled={assets.isFetching}>
+              {assets.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+              重试
+            </Button>
+          </EmptyState>
+        ) : items.length ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -291,7 +308,7 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
                   <TableCell className="text-right">
                     <IconTooltipButton label="下载" variant="ghost" size="icon-sm" asChild>
                       <a href={asset.download_url} download>
-                        <Download className="size-4" />
+                        <Download data-icon="inline-start" />
                       </a>
                     </IconTooltipButton>
                   </TableCell>
@@ -301,7 +318,7 @@ function DocumentAssetsCard({ documentID }: { documentID: string }) {
           </Table>
         ) : (
           <EmptyState
-            icon={<Paperclip className="size-5" />}
+            icon={<Paperclip />}
             title={assets.isLoading ? "加载中" : hiddenCount > 0 ? "暂无原件或导出文件" : "暂无文件"}
             description={
               assets.isLoading
@@ -343,9 +360,9 @@ function FailedPagesList({ runID }: { runID: string }) {
     return null;
   }
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-1.5">
       <div className="text-xs font-medium text-muted-foreground">失败页面({failed.length})</div>
-      <ul className="space-y-1">
+      <ul className="flex flex-col gap-1">
         {failed.map((page) => (
           <li key={page.page_id} className="flex items-start gap-2 text-sm">
             <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground">
@@ -374,10 +391,14 @@ function RecognitionSection({
   documentID,
   runs,
   isLoading,
+  error,
+  onRetry,
 }: {
   documentID: string;
   runs: RecognitionRun[];
   isLoading: boolean;
+  error?: Error | null;
+  onRetry: () => void;
 }) {
   const queryClient = useQueryClient();
   const latest = runs[0];
@@ -388,30 +409,43 @@ function RecognitionSection({
   const cancel = useMutation({
     mutationFn: (runID: string) => cancelRun(runID),
     onSuccess: () => {
-      toast({ title: "正在取消识别任务" });
+      toast("正在取消识别任务");
       queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
     },
-    onError: (error: Error) => toast({ title: "取消失败", description: error.message, variant: "error" }),
+    onError: (error: Error) => toast.error("取消失败", { description: error.message }),
   });
   const retry = useMutation({
     mutationFn: (runID: string) => retryRun(runID),
     onSuccess: () => {
-      toast({ title: "已开始重试失败页", variant: "success" });
+      toast.success("已开始重试失败页");
       queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
       queryClient.invalidateQueries({ queryKey: ["pages", documentID] });
       queryClient.invalidateQueries({ queryKey: ["document", documentID] });
     },
-    onError: (error: Error) => toast({ title: "无法重试", description: error.message, variant: "error" }),
+    onError: (error: Error) => toast.error("无法重试", { description: error.message }),
   });
 
+  if (error) {
+    return (
+      <Card>
+        <EmptyState title="识别记录加载失败" description={error.message} className="min-h-40">
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            <RefreshCw data-icon="inline-start" />
+            重试
+          </Button>
+        </EmptyState>
+      </Card>
+    );
+  }
+
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {latest ? (
         <Card>
-          <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 pb-3">
+          <CardHeader className="flex-row items-center justify-between gap-3 pb-3">
             <CardTitle className="inline-flex min-w-0 items-center gap-2 text-base">
               <span className="truncate">最新识别</span>
-              <RunStatusBadge status={latest.status} />
+              <StatusBadge value={latest.status} />
             </CardTitle>
             <div className="flex shrink-0 items-center gap-2">
               {latestActive ? (
@@ -421,19 +455,19 @@ function RecognitionSection({
                   disabled={cancel.isPending}
                   onClick={() => cancel.mutate(latest.id)}
                 >
-                  <Ban className="size-4" />
+                  {cancel.isPending ? <Spinner data-icon="inline-start" /> : <Ban data-icon="inline-start" />}
                   取消
                 </Button>
               ) : null}
               {latestHasFailures ? (
                 <Button variant="secondary" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(latest.id)}>
-                  <RotateCcw className="size-4" />
+                  {retry.isPending ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}
                   重试失败页
                 </Button>
               ) : null}
             </div>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="flex flex-col gap-3">
             <div className="flex items-center gap-3">
               <Progress value={progressValue} className="flex-1" />
               <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
@@ -445,11 +479,7 @@ function RecognitionSection({
               {latest.failed_pages > 0 ? <span className="text-destructive">失败 {latest.failed_pages} 页</span> : null}
               <span>{formatTime(latest.created_at)}</span>
             </div>
-            {latest.error ? (
-              <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {latest.error}
-              </div>
-            ) : null}
+            <ErrorMessage message={latest.error} />
             {latestHasFailures ? <FailedPagesList runID={latest.id} /> : null}
           </CardContent>
         </Card>
@@ -492,7 +522,7 @@ function RecognitionSection({
                       ) : null}
                     </TableCell>
                     <TableCell>
-                      <RunStatusBadge status={run.status} />
+                      <StatusBadge value={run.status} />
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground sm:table-cell">
                       <span className="tabular-nums">{run.done_pages}/{run.total_pages}</span>
@@ -520,6 +550,16 @@ export function DocumentDetailPage() {
   const { documentID = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState("md");
+  const [includePageNumbers, setIncludePageNumbers] = useState(true);
+  const [exportTextScope, setExportTextScope] = useState<"current" | "final">("current");
+  const [includeAnnotations, setIncludeAnnotations] = useState(false);
+  const [includeUncertain, setIncludeUncertain] = useState(false);
+  const [recognitionImageSource, setRecognitionImageSource] = useState<"original" | "enhanced">("original");
+  const [recognitionProviderSource, setRecognitionProviderSource] = useState("default");
+  const [recognitionPromptID, setRecognitionPromptID] = useState("active");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const doc = useQuery({ queryKey: ["document", documentID], queryFn: () => getDocument(documentID), enabled: !!documentID });
   const pages = useQuery({
     queryKey: ["pages", documentID],
@@ -527,6 +567,9 @@ export function DocumentDetailPage() {
     enabled: !!documentID,
     refetchInterval: 2500,
   });
+  const recognizerProfiles = useQuery({ queryKey: ["recognizer-profiles"], queryFn: listRecognizerProfiles });
+  const providerAdapters = useQuery({ queryKey: ["provider-adapters"], queryFn: listProviderAdapters });
+  const promptVersions = useQuery({ queryKey: ["prompt-versions"], queryFn: listPromptVersions });
   const runs = useQuery({
     queryKey: ["runs", documentID],
     queryFn: () => listRecognitionRuns(documentID),
@@ -537,26 +580,54 @@ export function DocumentDetailPage() {
     },
   });
   const recognition = useMutation({
-    mutationFn: () => startRecognition(documentID),
+    mutationFn: () => startRecognition(documentID, {
+      image_source: recognitionImageSource,
+      recognizer_profile_id: recognitionProviderSource.startsWith("profile:")
+        ? recognitionProviderSource.slice("profile:".length)
+        : undefined,
+      provider_adapter_id: recognitionProviderSource.startsWith("adapter:")
+        ? recognitionProviderSource.slice("adapter:".length)
+        : undefined,
+      prompt_version_id: recognitionPromptID === "active" ? undefined : recognitionPromptID,
+    }),
     onSuccess: () => {
-      toast({ title: "已开始识别", variant: "success" });
+      toast.success("已开始识别");
       queryClient.invalidateQueries({ queryKey: ["document", documentID] });
       queryClient.invalidateQueries({ queryKey: ["runs", documentID] });
     },
     onError: (error: Error) => {
       if (error instanceof ApiError && error.status === 409) {
-        toast({ title: "已有识别任务进行中", variant: "error" });
+        toast.error("已有识别任务进行中");
         return;
       }
-      toast({ title: "启动识别失败", description: error.message, variant: "error" });
+      toast.error("启动识别失败", { description: error.message });
     },
   });
   const exportMutation = useMutation({
-    mutationFn: (format: string) => exportDocument(documentID, { format, include_page_numbers: true }),
+    mutationFn: () => exportDocument(documentID, {
+      format: exportFormat,
+      include_page_numbers: includePageNumbers,
+      text_scope: exportTextScope,
+      include_annotations: includeAnnotations,
+      include_uncertain: includeUncertain,
+    }),
     onSuccess: (file) => {
+      setExportOpen(false);
       window.location.href = file.download_url;
       queryClient.invalidateQueries({ queryKey: ["assets", documentID] });
+      queryClient.invalidateQueries({ queryKey: ["document-exports", documentID] });
+      toast.success("导出文件已生成");
     },
+    onError: (error: Error) => toast.error("导出失败", { description: error.message }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDocument(documentID),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      toast.success("文档已删除");
+      navigate("/");
+    },
+    onError: (error: Error) => toast.error("删除失败", { description: error.message }),
   });
 
   const firstPageID = pages.data?.[0]?.page_id;
@@ -566,48 +637,89 @@ export function DocumentDetailPage() {
   const recognizedPages = pageItems.filter((page) => page.recognition_count > 0).length;
   const verifiedPages = pageItems.filter((page) => page.has_final).length;
 
+  if (doc.isError) {
+    return (
+      <div className="flex flex-col gap-5">
+        <PageHeader title="文档加载失败" description="无法获取文档信息，请检查连接后重试。" />
+        <Card>
+          <EmptyState title="无法打开文档" description={doc.error.message}>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button variant="outline" onClick={() => navigate("/")}>返回文档列表</Button>
+              <Button onClick={() => void doc.refetch()} disabled={doc.isFetching}>
+                {doc.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                重试
+              </Button>
+            </div>
+          </EmptyState>
+        </Card>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-5">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-2">
         <PageHeader
           title={
             <span className="inline-flex min-w-0 items-center gap-2">
               <span className="truncate">{doc.data?.title ?? "文档"}</span>
-              {doc.data ? <Badge value={doc.data.status} /> : null}
+              {doc.data ? <StatusBadge value={doc.data.status} /> : null}
             </span>
           }
           description={`${doc.data?.page_count ?? 0} 页 · ${formatTime(doc.data?.updated_at) || "--"}`}
         >
-          <IconTooltipButton label="刷新" variant="outline" size="icon" onClick={() => pages.refetch()}>
-            <RefreshCw className="size-4" />
+          <IconTooltipButton label="刷新" variant="outline" size="icon" onClick={() => void pages.refetch()} disabled={pages.isFetching}>
+            {pages.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
           </IconTooltipButton>
           <Button onClick={() => recognition.mutate()} disabled={recognition.isPending || !pageItems.length || hasActiveRun}>
-            <Play className="size-4" />
+            {recognition.isPending ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
             {recognition.isPending ? "排队中" : hasActiveRun ? "识别中" : "识别"}
           </Button>
+          <Select value={recognitionImageSource} onValueChange={(value) => setRecognitionImageSource(value as "original" | "enhanced")}>
+            <SelectTrigger className="w-32" aria-label="识别图像来源"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="original">使用原图</SelectItem>
+              <SelectItem value="enhanced">使用增强图</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={recognitionProviderSource} onValueChange={setRecognitionProviderSource}>
+            <SelectTrigger className="w-44" aria-label="识别来源"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="default">默认识别器</SelectItem>
+              </SelectGroup>
+              <SelectGroup>
+                {recognizerProfiles.data?.map((profile) => (
+                  <SelectItem key={profile.id} value={`profile:${profile.id}`}>Profile · {profile.name}</SelectItem>
+                ))}
+              </SelectGroup>
+              <SelectGroup>
+                {providerAdapters.data?.filter((adapter) => adapter.is_enabled).map((adapter) => (
+                  <SelectItem key={adapter.id} value={`adapter:${adapter.id}`}>Adapter · {adapter.name}</SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select value={recognitionPromptID} onValueChange={setRecognitionPromptID}>
+            <SelectTrigger className="w-40" aria-label="Prompt 版本"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Profile 默认 / 激活版本</SelectItem>
+              {promptVersions.data?.map((prompt) => (
+                <SelectItem key={prompt.id} value={prompt.id}>{prompt.version}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="secondary" disabled={!firstPageID} onClick={() => navigate(`/review/${documentID}/${firstPageID}`)}>
-            <FileText className="size-4" />
+            <FileText data-icon="inline-start" />
             校对
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" disabled={exportMutation.isPending}>
-                <Download className="size-4" />
-                {exportMutation.isPending ? "导出中" : "导出"}
-                <ChevronDown className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => exportMutation.mutate("md")}>
-                <FileType className="size-4" />
-                Markdown
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportMutation.mutate("txt")}>
-                <FileText className="size-4" />
-                纯文本
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button variant="secondary" disabled={exportMutation.isPending} onClick={() => setExportOpen(true)}>
+            {exportMutation.isPending ? <Spinner data-icon="inline-start" /> : <Download data-icon="inline-start" />}
+            {exportMutation.isPending ? "导出中" : "导出"}
+          </Button>
+          <IconTooltipButton label="删除文档" variant="outline" size="icon" onClick={() => setDeleteOpen(true)}>
+            <Trash2 data-icon="inline-start" />
+          </IconTooltipButton>
         </PageHeader>
         <div className="flex flex-wrap items-center gap-2">
           {doc.data ? <TagEditor documentID={documentID} tags={doc.data.tags ?? []} /> : null}
@@ -616,13 +728,11 @@ export function DocumentDetailPage() {
       </div>
 
       <section className="grid gap-3 md:grid-cols-4">
-        <MetricCard icon={<Layers3 className="size-4" />} label="页面" value={pageItems.length || doc.data?.page_count || 0} />
-        <MetricCard icon={<FileType className="size-4" />} label="已识别" value={recognizedPages} />
-        <MetricCard icon={<FileText className="size-4" />} label="已定稿" value={verifiedPages} />
-        <MetricCard icon={<RotateCw className="size-4" />} label="运行" value={runItems.length} hint={runItems[0] ? formatTime(runItems[0].created_at) : "暂无"} />
+        <MetricCard icon={<Layers3 />} label="页面" value={pageItems.length || doc.data?.page_count || 0} />
+        <MetricCard icon={<FileType />} label="已识别" value={recognizedPages} />
+        <MetricCard icon={<FileText />} label="已定稿" value={verifiedPages} />
+        <MetricCard icon={<RotateCw />} label="运行" value={runItems.length} hint={runItems[0] ? formatTime(runItems[0].created_at) : "暂无"} />
       </section>
-
-      <ErrorMessage message={exportMutation.error?.message} />
 
       <section className="grid items-start gap-3 xl:grid-cols-2">
         <DocumentInfoCard documentID={documentID} doc={doc.data} />
@@ -630,7 +740,16 @@ export function DocumentDetailPage() {
       </section>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {pageItems.map((page) => (
+        {pages.isError ? (
+          <Card className="sm:col-span-2 xl:col-span-4">
+            <EmptyState title="页面加载失败" description={pages.error.message}>
+              <Button variant="outline" size="sm" onClick={() => void pages.refetch()} disabled={pages.isFetching}>
+                {pages.isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                重试
+              </Button>
+            </EmptyState>
+          </Card>
+        ) : pageItems.map((page) => (
           <Link
             key={page.page_id}
             to={`/review/${documentID}/${page.page_id}`}
@@ -647,10 +766,10 @@ export function DocumentDetailPage() {
                 {page.page_no}
               </span>
             </div>
-            <div className="space-y-3 p-3 transition-colors group-hover:bg-accent/40">
+            <div className="flex flex-col gap-3 p-3 transition-colors group-hover:bg-accent/40">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium group-hover:text-primary">第 {page.page_no} 页</span>
-                <Badge value={page.page_status} />
+                <StatusBadge value={page.page_status} />
               </div>
               <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
                 <span>识别 {page.recognition_count}</span>
@@ -660,10 +779,10 @@ export function DocumentDetailPage() {
             </div>
           </Link>
         ))}
-        {!pageItems.length ? (
+        {!pages.isError && !pageItems.length ? (
           <Card className="sm:col-span-2 xl:col-span-4">
             <EmptyState
-              icon={<FileText className="size-5" />}
+              icon={<FileText />}
               title={pages.isLoading ? "加载中" : "暂无页面"}
               description={pages.isLoading ? undefined : "页面拆分完成后会显示缩略图。"}
             />
@@ -671,7 +790,105 @@ export function DocumentDetailPage() {
         ) : null}
       </section>
 
-      <RecognitionSection documentID={documentID} runs={runItems} isLoading={runs.isLoading} />
+      <PageProcessingCard documentID={documentID} pages={pageItems} />
+
+      <RecognitionExperimentsCard documentID={documentID} pages={pageItems} />
+
+      <ExportHistoryCard scope="document" targetID={documentID} />
+
+      <RecognitionSection
+        documentID={documentID}
+        runs={runItems}
+        isLoading={runs.isLoading}
+        error={runs.isError ? runs.error : null}
+        onRetry={() => void runs.refetch()}
+      />
+
+      <Dialog open={exportOpen} onOpenChange={(open) => !exportMutation.isPending && setExportOpen(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>导出文档</DialogTitle>
+            <DialogDescription>选择文件格式、文本版本以及需要随文保留的审校信息。</DialogDescription>
+          </DialogHeader>
+          <FieldGroup className="gap-4">
+            <Field>
+              <FieldLabel htmlFor="export-format">格式</FieldLabel>
+              <Select value={exportFormat} onValueChange={setExportFormat}>
+                <SelectTrigger id="export-format"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="md">Markdown</SelectItem>
+                    <SelectItem value="txt">纯文本</SelectItem>
+                    <SelectItem value="docx">Word 文档（DOCX）</SelectItem>
+                    <SelectItem value="pdf">PDF 审校版</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>{exportFormat === "pdf" ? "PDF 审校版会同时排入原始页图、转录文本和所选审校记录。" : "所有格式都使用同一份导出选项快照。"}</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="export-text-scope">文本版本</FieldLabel>
+              <Select value={exportTextScope} onValueChange={(value) => setExportTextScope(value as "current" | "final")}>
+                <SelectTrigger id="export-text-scope"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="current">当前稿</SelectItem>
+                    <SelectItem value="final">仅最终定稿</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>{exportTextScope === "final" ? "只导出已经确认定稿的页面；尚未定稿的页面会跳过。" : "逐页导出当前校对界面正在使用的最新有效文本。"}</FieldDescription>
+            </Field>
+            <Field orientation="horizontal" className="rounded-md border p-3">
+              <FieldLabel htmlFor="include-page-numbers">保留页码</FieldLabel>
+              <Switch id="include-page-numbers" checked={includePageNumbers} onCheckedChange={setIncludePageNumbers} />
+            </Field>
+            <Field orientation="horizontal" className="rounded-md border p-3">
+              <div className="flex flex-col gap-1">
+                <FieldLabel htmlFor="include-annotations">包含批注</FieldLabel>
+                <FieldDescription>附带页级批注和区域批注。</FieldDescription>
+              </div>
+              <Switch id="include-annotations" checked={includeAnnotations} onCheckedChange={setIncludeAnnotations} />
+            </Field>
+            <Field orientation="horizontal" className="rounded-md border p-3">
+              <div className="flex flex-col gap-1">
+                <FieldLabel htmlFor="include-uncertain">保留存疑标记</FieldLabel>
+                <FieldDescription>在正文中标出仍待处理的存疑字词。</FieldDescription>
+              </div>
+              <Switch id="include-uncertain" checked={includeUncertain} onCheckedChange={setIncludeUncertain} />
+            </Field>
+            <ErrorMessage message={exportMutation.error?.message} />
+          </FieldGroup>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExportOpen(false)} disabled={exportMutation.isPending}>取消</Button>
+            <Button onClick={() => exportMutation.mutate()} disabled={exportMutation.isPending}>
+              {exportMutation.isPending ? <Spinner data-icon="inline-start" /> : <Download data-icon="inline-start" />}
+              {exportMutation.isPending ? "导出中" : "开始导出"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => !deleteMutation.isPending && setDeleteOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除文档？</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除“{doc.data?.title || "当前文档"}”吗？页面、识别结果和文本版本将一并删除，此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorMessage message={deleteMutation.error?.message} />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction asChild>
+              <Button variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
+                {deleteMutation.isPending ? <Spinner data-icon="inline-start" /> : <Trash2 data-icon="inline-start" />}
+                {deleteMutation.isPending ? "删除中" : "确认删除"}
+              </Button>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

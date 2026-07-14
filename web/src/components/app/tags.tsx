@@ -1,8 +1,10 @@
 import { useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Tag as TagIcon, X } from "lucide-react";
+import { Plus, Tag as TagIcon, X } from "lucide-react";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { Field, FieldError, FieldLabel } from "../ui/field";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../ui/input-group";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { listTags, setDocumentTags, type Document, type Tag } from "../../lib/api";
@@ -21,20 +23,21 @@ export function TagChips({ tags, className }: { tags?: Tag[]; className?: string
 
 export function TagChip({ name, onRemove }: { name: string; onRemove?: () => void }) {
   return (
-    <span className="inline-flex h-6 max-w-full items-center gap-1 rounded-md border bg-secondary px-2 text-xs text-secondary-foreground">
-      <TagIcon className="size-3 shrink-0 text-muted-foreground" />
+    <Badge variant="secondary" className="max-w-full">
+      <TagIcon />
       <span className="truncate">{name}</span>
       {onRemove ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           aria-label={`移除标签 ${name}`}
-          className="ml-0.5 shrink-0 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={onRemove}
         >
-          <X className="size-3" />
-        </button>
+          <X />
+        </Button>
       ) : null}
-    </span>
+    </Badge>
   );
 }
 
@@ -86,13 +89,13 @@ export function TagEditor({ documentID, tags }: { documentID: string; tags: Tag[
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm">
-          <TagIcon className="size-4" />
+          <TagIcon data-icon="inline-start" />
           标签
           {names.length ? <span className="text-xs text-muted-foreground">{names.length}</span> : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 p-3">
-        <div className="space-y-3">
+      <PopoverContent align="start" className="w-[calc(100vw-2rem)] max-w-80 p-3">
+        <div className="flex flex-col gap-3">
           <div className="text-sm font-medium">文档标签</div>
           {names.length ? (
             <div className="flex flex-wrap gap-1.5">
@@ -103,49 +106,48 @@ export function TagEditor({ documentID, tags }: { documentID: string; tags: Tag[
           ) : (
             <div className="text-sm text-muted-foreground">暂无标签,输入名称添加。</div>
           )}
-          <div className="flex gap-2">
-            <Input
-              value={input}
-              placeholder="新标签,回车添加"
-              className="h-8"
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={onInputKeyDown}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!input.trim() || mutation.isPending}
-              onClick={() => {
-                addTag(input);
-                setInput("");
-              }}
-            >
-              <Plus className="size-4" />
-              添加
-            </Button>
-          </div>
+          <Field data-invalid={mutation.isError ? true : undefined}>
+            <FieldLabel htmlFor="new-tag" className="sr-only">新标签</FieldLabel>
+            <InputGroup>
+              <InputGroupInput
+                id="new-tag"
+                value={input}
+                placeholder="输入新标签，按回车添加"
+                aria-invalid={mutation.isError ? true : undefined}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={onInputKeyDown}
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="sm"
+                  disabled={!input.trim() || mutation.isPending}
+                  onClick={() => {
+                    addTag(input);
+                    setInput("");
+                  }}
+                >
+                  <Plus data-icon="inline-start" />
+                  添加
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+            <FieldError>{mutation.error?.message}</FieldError>
+          </Field>
           {suggestions.length ? (
             <>
               <Separator />
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <div className="text-xs text-muted-foreground">已有标签</div>
                 <div className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
                   {suggestions.map((tag) => (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      className="inline-flex h-6 items-center gap-1 rounded-md border px-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      onClick={() => addTag(tag.name)}
-                    >
-                      <Check className="size-3 opacity-0" />
-                      {tag.name}
-                    </button>
+                    <Badge key={tag.id} asChild variant="outline">
+                      <button type="button" onClick={() => addTag(tag.name)}>{tag.name}</button>
+                    </Badge>
                   ))}
                 </div>
               </div>
             </>
           ) : null}
-          {mutation.error ? <div className="text-xs text-destructive">{mutation.error.message}</div> : null}
         </div>
       </PopoverContent>
     </Popover>
