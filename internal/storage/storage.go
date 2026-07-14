@@ -30,6 +30,7 @@ func New(root string) (*Storage, error) {
 		root,
 		filepath.Join(root, "originals"),
 		filepath.Join(root, "pages"),
+		filepath.Join(root, "derived"),
 		filepath.Join(root, "thumbs"),
 		filepath.Join(root, "exports"),
 		filepath.Join(root, "tmp"),
@@ -188,6 +189,10 @@ func PageImageRel(documentID string, pageNo int, ext string) string {
 
 func ThumbnailRel(documentID string, pageNo int) string {
 	return filepath.ToSlash(filepath.Join("thumbs", documentID, fmt.Sprintf("page-%04d.jpg", pageNo)))
+}
+
+func EnhancedPageRel(documentID string, pageNo int, resultID string) string {
+	return filepath.ToSlash(filepath.Join("derived", documentID, fmt.Sprintf("page-%04d", pageNo), resultID+".png"))
 }
 
 func ExportRel(exportID, format string) string {

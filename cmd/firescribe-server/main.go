@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -41,7 +42,11 @@ func main() {
 		log.Fatalf("prepare storage: %v", err)
 	}
 
-	application := app.New(app.NewStore(conn), files, recognizer.Build(cfg))
+	store := app.NewStore(conn)
+	if err := store.ConfigureSecretFile(context.Background(), filepath.Join(cfg.DataDir, "secrets.json")); err != nil {
+		log.Fatalf("prepare credential store: %v", err)
+	}
+	application := app.New(store, files, recognizer.Build(cfg))
 	application.SetOptions(app.Options{PDFRenderDPI: cfg.PDFRenderDPI})
 
 	runtime := config.NewRuntime(cfg)
@@ -51,7 +56,7 @@ func main() {
 	})
 
 	if n, err := application.Store.RecoverInterrupted(context.Background()); err != nil {
-		log.Printf("recover interrupted jobs: %v", err)
+		log.Fatalf("recover interrupted jobs: %v", err)
 	} else if n > 0 {
 		log.Printf("marked %d interrupted job(s) as failed", n)
 	}

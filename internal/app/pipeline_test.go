@@ -198,8 +198,8 @@ func TestPartialFailureAndRetryOnlyFailedPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotDoc.Status != "reviewing" {
-		t.Fatalf("document status = %s, want reviewing", gotDoc.Status)
+	if gotDoc.Status != "review_pending" {
+		t.Fatalf("document status = %s, want review_pending", gotDoc.Status)
 	}
 
 	// Retry re-runs only the failed page.
@@ -279,6 +279,47 @@ func TestConcurrentRecognitionRejectedThenCancel(t *testing.T) {
 	}
 	if got := waitForRun(t, application, second.Run.ID); got.Status != "succeeded" {
 		t.Fatalf("second run status = %s (error=%s)", got.Status, got.Error)
+	}
+}
+
+func TestRecognitionWorkerForcesCanceledWhenTerminalEventFails(t *testing.T) {
+	ctx := context.Background()
+	block := make(chan struct{})
+	rec := &scriptedRecognizer{block: block}
+	application, conn := newTestApp(t, rec)
+	doc := importThreePages(t, application)
+	if _, err := conn.Exec(`
+		CREATE TRIGGER reject_canceled_job_event
+		BEFORE INSERT ON job_events
+		WHEN NEW.stage = 'canceled'
+		BEGIN SELECT RAISE(ABORT, 'reject canceled event'); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	start, err := application.StartRecognition(ctx, doc.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for rec.callCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec.callCount() == 0 {
+		t.Fatal("recognition worker did not start")
+	}
+	if err := application.CancelRun(ctx, start.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if run := waitForRun(t, application, start.Run.ID); run.Status != "canceled" {
+		t.Fatalf("run status = %s, want canceled", run.Status)
+	}
+	job, err := application.Store.GetJob(ctx, start.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "canceled" {
+		t.Fatalf("job was left %s after canceled event failure", job.Status)
 	}
 }
 
@@ -402,7 +443,7 @@ func TestStartRecognitionValidatesPageIDs(t *testing.T) {
 	}
 }
 
-func TestVerifiedPagesAreNotDowngradedByReruns(t *testing.T) {
+func TestHumanReviewedPagesAreNotDowngradedByReruns(t *testing.T) {
 	ctx := context.Background()
 	rec := &scriptedRecognizer{}
 	application, _ := newTestApp(t, rec)
@@ -423,6 +464,11 @@ func TestVerifiedPagesAreNotDowngradedByReruns(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := application.SaveTextVersion(ctx, app.TextVersion{
+		DocumentID: doc.ID, PageID: pages[1].ID, Kind: "manual", Text: "人工草稿", Status: "draft", CreatedBy: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	second, err := application.StartRecognition(ctx, doc.ID, nil)
 	if err != nil {
@@ -436,5 +482,12 @@ func TestVerifiedPagesAreNotDowngradedByReruns(t *testing.T) {
 	}
 	if page.Status != "verified" {
 		t.Fatalf("verified page downgraded to %s", page.Status)
+	}
+	manualPage, err := application.Store.GetPage(ctx, pages[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manualPage.Status != "reviewing" {
+		t.Fatalf("manual page downgraded to %s", manualPage.Status)
 	}
 }
