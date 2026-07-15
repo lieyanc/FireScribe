@@ -2,20 +2,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   ArrowLeft,
   BookOpenText,
+  ChevronsUpDown,
   FolderKanban,
   FileQuestion,
+  KeyRound,
   ListChecks,
+  LogOut,
   Moon,
   RefreshCw,
   ScanSearch,
   ChartNoAxesCombined,
   Settings2,
+  ShieldBan,
   Sun,
   UserRoundPen,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { ChangePasswordDialog } from "./components/app/change-password-dialog";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -25,6 +31,14 @@ import {
   BreadcrumbSeparator,
 } from "./components/ui/breadcrumb";
 import { Button } from "./components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -52,7 +66,11 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "./components/ui/sidebar";
+import { Spinner } from "./components/ui/spinner";
 import { Toaster } from "./components/ui/sonner";
+import { AuthProvider, useAuth } from "./hooks/use-auth";
+import { ApiError } from "./lib/api";
+import { LoginPage } from "./pages/LoginPage";
 
 const DocumentsPage = lazy(() => import("./pages/DocumentsPage").then((module) => ({ default: module.DocumentsPage })));
 const DocumentDetailPage = lazy(() => import("./pages/DocumentDetailPage").then((module) => ({ default: module.DocumentDetailPage })));
@@ -66,6 +84,7 @@ const AuthorsPage = lazy(() => import("./pages/AuthorsPage").then((module) => ({
 const AuthorDetailPage = lazy(() => import("./pages/AuthorDetailPage").then((module) => ({ default: module.AuthorDetailPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const SystemPage = lazy(() => import("./pages/SystemPage").then((module) => ({ default: module.SystemPage })));
+const UsersPage = lazy(() => import("./pages/UsersPage").then((module) => ({ default: module.UsersPage })));
 
 type Theme = "light" | "dark";
 
@@ -76,7 +95,16 @@ type NavigationItem = {
   isActive: (pathname: string) => boolean;
 };
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+        return failureCount < 3;
+      },
+    },
+  },
+});
 const themeStorageKey = "firescribe-theme";
 
 const primaryNavigation: NavigationItem[] = [
@@ -127,6 +155,12 @@ const managementNavigation: NavigationItem[] = [
     isActive: (pathname) => pathname === "/settings",
   },
   {
+    to: "/users",
+    icon: UsersRound,
+    label: "用户",
+    isActive: (pathname) => pathname === "/users",
+  },
+  {
     to: "/system",
     icon: RefreshCw,
     label: "系统",
@@ -149,10 +183,32 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AppShell theme={theme} onToggleTheme={() => setTheme((current) => (current === "dark" ? "light" : "dark"))} />
+      <AuthProvider>
+        <AuthGate theme={theme} onToggleTheme={() => setTheme((current) => (current === "dark" ? "light" : "dark"))} />
+      </AuthProvider>
       <Toaster theme={theme} richColors closeButton />
     </QueryClientProvider>
   );
+}
+
+function AuthGate({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+  const { state } = useAuth();
+
+  if (state.phase === "loading") {
+    return (
+      <div className="flex min-h-svh items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        正在检查登录状态…
+      </div>
+    );
+  }
+  if (state.phase === "setup") {
+    return <LoginPage mode="setup" />;
+  }
+  if (state.phase === "guest") {
+    return <LoginPage mode="login" />;
+  }
+  return <AppShell theme={theme} onToggleTheme={onToggleTheme} />;
 }
 
 function AppShell({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
@@ -187,8 +243,30 @@ function AppShell({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =>
               <Route path="/evaluation" element={<EvaluationPage />} />
               <Route path="/authors" element={<AuthorsPage />} />
               <Route path="/authors/:profileID" element={<AuthorDetailPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/system" element={<SystemPage />} />
+              <Route
+                path="/settings"
+                element={
+                  <AdminRoute>
+                    <SettingsPage />
+                  </AdminRoute>
+                }
+              />
+              <Route
+                path="/users"
+                element={
+                  <AdminRoute>
+                    <UsersPage />
+                  </AdminRoute>
+                }
+              />
+              <Route
+                path="/system"
+                element={
+                  <AdminRoute>
+                    <SystemPage />
+                  </AdminRoute>
+                }
+              />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </Suspense>
@@ -198,8 +276,35 @@ function AppShell({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =>
   );
 }
 
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) {
+    return (
+      <Empty className="min-h-[60vh] border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ShieldBan />
+          </EmptyMedia>
+          <EmptyTitle>需要管理员权限</EmptyTitle>
+          <EmptyDescription>该页面仅对管理员开放。如需修改设置或管理用户，请联系管理员。</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild>
+            <Link to="/">
+              <ArrowLeft />
+              返回文档库
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
+  return <>{children}</>;
+}
+
 function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; theme: Theme; onToggleTheme: () => void }) {
   const { isMobile, setOpenMobile } = useSidebar();
+  const { isAdmin } = useAuth();
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -241,16 +346,18 @@ function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; them
       <SidebarSeparator />
 
       <SidebarFooter>
-        <SidebarGroup className="p-0">
-          <SidebarGroupLabel>管理</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {managementNavigation.map((item) => (
-                <AppNavigationItem key={item.to} item={item} pathname={pathname} />
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {isAdmin ? (
+          <SidebarGroup className="p-0">
+            <SidebarGroupLabel>管理</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {managementNavigation.map((item) => (
+                  <AppNavigationItem key={item.to} item={item} pathname={pathname} />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
 
         <SidebarMenu>
           <SidebarMenuItem>
@@ -264,10 +371,55 @@ function AppSidebar({ pathname, theme, onToggleTheme }: { pathname: string; them
               <span>{theme === "dark" ? "浅色模式" : "深色模式"}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarUserMenu />
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+function SidebarUserMenu() {
+  const { user, isAdmin, signOut } = useAuth();
+  const { isMobile } = useSidebar();
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+
+  if (!user) return null;
+  const label = user.display_name || user.username;
+
+  return (
+    <SidebarMenuItem>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <SidebarMenuButton size="lg" tooltip={label} aria-label="账户菜单">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+              {label.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="flex min-w-0 flex-col leading-tight">
+              <span className="truncate font-medium">{label}</span>
+              <span className="truncate text-xs text-muted-foreground">{isAdmin ? "管理员" : "普通用户"}</span>
+            </span>
+            <ChevronsUpDown className="ml-auto size-4" />
+          </SidebarMenuButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-48">
+          <DropdownMenuLabel className="flex flex-col">
+            <span>{label}</span>
+            <span className="text-xs font-normal text-muted-foreground">@{user.username}</span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setChangePasswordOpen(true)}>
+            <KeyRound />
+            修改密码
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => void signOut()}>
+            <LogOut />
+            退出登录
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />
+    </SidebarMenuItem>
   );
 }
 
@@ -335,6 +487,7 @@ function getRouteSection(pathname: string): { label: string; parent?: { label: s
   if (pathname === "/authors") return { label: "作者档案" };
   if (pathname.startsWith("/authors/")) return { label: "档案详情", parent: { label: "作者档案", to: "/authors" } };
   if (pathname === "/settings") return { label: "设置" };
+  if (pathname === "/users") return { label: "用户" };
   if (pathname === "/system") return { label: "系统" };
   return { label: "页面未找到" };
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, FileText, GitCommit, KeyRound, RefreshCw, RotateCw, Server, X } from "lucide-react";
+import { CheckCircle2, Download, FileText, GitCommit, RefreshCw, RotateCw, Server, X } from "lucide-react";
 import { toast } from "sonner";
 import { ErrorMessage, MetricCard, PageHeader } from "../components/app/chrome";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -20,13 +20,12 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../components/ui/empty";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "../components/ui/field";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group";
+import { Field, FieldLabel } from "../components/ui/field";
 import { Progress } from "../components/ui/progress";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Skeleton } from "../components/ui/skeleton";
 import { Spinner } from "../components/ui/spinner";
-import { applyUpdate, checkUpdate, dismissUpdate, getAdminToken, getUpdateStatus, getVersion, setAdminToken } from "../lib/api";
+import { applyUpdate, checkUpdate, dismissUpdate, getUpdateStatus, getVersion } from "../lib/api";
 import { formatTime, statusLabel } from "../lib/format";
 
 const BUSY_STATE_LABELS: Record<string, string> = {
@@ -43,8 +42,6 @@ function updateStateVariant(state: string): "default" | "secondary" | "destructi
 
 export function SystemPage() {
   const queryClient = useQueryClient();
-  const [savedToken, setSavedToken] = useState(() => getAdminToken());
-  const [token, setToken] = useState(() => getAdminToken());
   const [applyDialogOpen, setApplyDialogOpen] = useState(false);
   const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
   const version = useQuery({ queryKey: ["version"], queryFn: getVersion });
@@ -121,24 +118,6 @@ export function SystemPage() {
     }
     seenVersion.current = currentVersion;
   }, [currentVersion]);
-
-  const tokenDirty = token.trim() !== savedToken;
-
-  function saveToken() {
-    const next = token.trim();
-    if (!next || next === savedToken) return;
-    setAdminToken(next);
-    setToken(next);
-    setSavedToken(next);
-    toast.success("管理令牌已保存到当前浏览器");
-  }
-
-  function clearToken() {
-    setAdminToken("");
-    setToken("");
-    setSavedToken("");
-    toast.success("管理令牌已清除");
-  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -243,10 +222,10 @@ export function SystemPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>版本与访问控制</CardTitle>
-          <CardDescription>构建信息来自当前服务；管理令牌只保存在此浏览器中。</CardDescription>
+          <CardTitle>版本信息</CardTitle>
+          <CardDescription>构建信息来自当前服务；更新操作需要管理员账户。</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-6">
+        <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
             <Info label="构建时间" value={version.isPending ? <Skeleton className="h-4 w-28" /> : version.data?.build_time} />
             <Info label="更新通道" value={version.data?.update_channel || result?.channel} />
@@ -257,43 +236,6 @@ export function SystemPage() {
             <Info label="仓库" value={version.data?.update_repo} />
             <Info label="上次检查" value={formatTime(snapshot?.last_check)} />
           </div>
-
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="admin-token">管理令牌</FieldLabel>
-              <InputGroup>
-                <InputGroupAddon>
-                  <KeyRound />
-                </InputGroupAddon>
-                <InputGroupInput
-                  id="admin-token"
-                  type="password"
-                  autoComplete="off"
-                  value={token}
-                  placeholder="本机访问通常无需填写"
-                  onChange={(event) => setToken(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") saveToken();
-                  }}
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton disabled={!tokenDirty || !token.trim()} onClick={saveToken}>
-                    保存
-                  </InputGroupButton>
-                  <InputGroupButton disabled={!savedToken && !token} onClick={clearToken}>
-                    清除
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-              <FieldDescription>
-                {tokenDirty
-                  ? "令牌有未保存的更改。"
-                  : savedToken
-                    ? "令牌已保存；远程更新请求会通过 X-Admin-Token 发送。"
-                    : "远程触发更新时，令牌需与服务端 update.admin_token 一致。"}
-              </FieldDescription>
-            </Field>
-          </FieldGroup>
         </CardContent>
       </Card>
 

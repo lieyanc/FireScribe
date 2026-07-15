@@ -736,24 +736,27 @@ export type UpdateCheckResult = {
   error?: string;
 };
 
-const ADMIN_TOKEN_STORAGE_KEY = "firescribe.admin_token";
+export type AuthRole = "admin" | "user";
 
-export function getAdminToken(): string {
-  return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ?? "";
-}
+export type AuthUser = {
+  id: string;
+  username: string;
+  display_name: string;
+  role: AuthRole;
+  disabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at?: string;
+};
 
-export function setAdminToken(token: string) {
-  if (token) {
-    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-  } else {
-    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  }
-}
+export type AuthStatus = {
+  needs_setup: boolean;
+  authenticated: boolean;
+  user?: AuthUser;
+};
 
-function adminHeaders(): Record<string, string> {
-  const token = getAdminToken();
-  return token ? { "X-Admin-Token": token } : {};
-}
+/** Fired when any API call gets a 401 so the app can fall back to the login screen. */
+export const UNAUTHENTICATED_EVENT = "firescribe:unauthenticated";
 
 export class ApiError extends Error {
   status: number;
@@ -774,12 +777,74 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep status text
     }
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      window.dispatchEvent(new Event(UNAUTHENTICATED_EVENT));
+    }
     throw new ApiError(message, response.status);
   }
   if (response.status === 204) {
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+export function getAuthStatus() {
+  return apiFetch<AuthStatus>("/api/auth/status");
+}
+
+export function login(input: { username: string; password: string }) {
+  return apiFetch<AuthUser>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function setupInitialAdmin(input: { username: string; password: string; display_name?: string }) {
+  return apiFetch<AuthUser>("/api/auth/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function logout() {
+  return apiFetch<void>("/api/auth/logout", { method: "POST" });
+}
+
+export function changeOwnPassword(input: { current_password: string; new_password: string }) {
+  return apiFetch<{ status: string }>("/api/auth/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listUsers() {
+  return apiFetch<AuthUser[]>("/api/users");
+}
+
+export function createUser(input: { username: string; password: string; display_name?: string; role: AuthRole }) {
+  return apiFetch<AuthUser>("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateUser(
+  id: string,
+  input: Partial<{ display_name: string; role: AuthRole; disabled: boolean; password: string }>,
+) {
+  return apiFetch<AuthUser>(`/api/users/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteUser(id: string) {
+  return apiFetch<void>(`/api/users/${id}`, { method: "DELETE" });
 }
 
 export function listDocuments(params: { q?: string; status?: string; tag?: string }) {
@@ -1047,7 +1112,7 @@ export function listRecognizerProfiles() {
 export function createRecognizerProfile(input: RecognizerProfileInput) {
   return apiFetch<RecognizerProfile>("/api/recognizer-profiles", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
@@ -1055,13 +1120,13 @@ export function createRecognizerProfile(input: RecognizerProfileInput) {
 export function updateRecognizerProfile(id: string, input: RecognizerProfileInput) {
   return apiFetch<RecognizerProfile>(`/api/recognizer-profiles/${id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
 export function deleteRecognizerProfile(id: string) {
-  return apiFetch<void>(`/api/recognizer-profiles/${id}`, { method: "DELETE", headers: adminHeaders() });
+  return apiFetch<void>(`/api/recognizer-profiles/${id}`, { method: "DELETE" });
 }
 
 export function listProviderAdapters() {
@@ -1071,7 +1136,7 @@ export function listProviderAdapters() {
 export function createProviderAdapter(input: ProviderAdapterInput) {
   return apiFetch<ProviderAdapter>("/api/provider-adapters", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
@@ -1079,13 +1144,13 @@ export function createProviderAdapter(input: ProviderAdapterInput) {
 export function updateProviderAdapter(id: string, input: ProviderAdapterInput) {
   return apiFetch<ProviderAdapter>(`/api/provider-adapters/${id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
 export function deleteProviderAdapter(id: string) {
-  return apiFetch<void>(`/api/provider-adapters/${id}`, { method: "DELETE", headers: adminHeaders() });
+  return apiFetch<void>(`/api/provider-adapters/${id}`, { method: "DELETE" });
 }
 
 export async function createRecognitionExperiment(documentID: string, input: RecognitionExperimentInput) {
@@ -1328,15 +1393,15 @@ export function getUpdateStatus() {
 }
 
 export function checkUpdate() {
-  return apiFetch<UpdateCheckResult>("/api/update/check", { method: "POST", headers: adminHeaders() });
+  return apiFetch<UpdateCheckResult>("/api/update/check", { method: "POST" });
 }
 
 export function applyUpdate() {
-  return apiFetch<{ status: string }>("/api/update/apply", { method: "POST", headers: adminHeaders() });
+  return apiFetch<{ status: string }>("/api/update/apply", { method: "POST" });
 }
 
 export function dismissUpdate() {
-  return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST", headers: adminHeaders() });
+  return apiFetch<{ status: string }>("/api/update/dismiss", { method: "POST" });
 }
 
 export function getSettings() {
@@ -1346,7 +1411,7 @@ export function getSettings() {
 export function updateSettings(input: SettingsInput) {
   return apiFetch<Settings>("/api/settings", {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
@@ -1358,7 +1423,7 @@ export function listPromptVersions() {
 export function createPromptVersion(input: { version: string; content: string }) {
   return apiFetch<PromptVersion>("/api/prompts", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
@@ -1366,6 +1431,5 @@ export function createPromptVersion(input: { version: string; content: string })
 export function activatePromptVersion(id: string) {
   return apiFetch<PromptVersion>(`/api/prompts/${id}/activate`, {
     method: "POST",
-    headers: adminHeaders(),
-  });
+      });
 }
