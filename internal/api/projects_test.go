@@ -40,7 +40,7 @@ func TestProjectsAPIAndMergedExport(t *testing.T) {
 		defer cancel()
 		application.Shutdown(shutdownCtx)
 	})
-	handler := api.New(application, "", nil).Routes()
+	handler := authedHandler(t, api.New(application, "", nil).Routes())
 
 	docA := importProjectTestDocument(t, application, "甲文", "甲文正文")
 	docB := importProjectTestDocument(t, application, "乙文", "乙文正文")

@@ -32,7 +32,7 @@ func TestAuthorProfilesAPITrainingDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := app.New(app.NewStore(conn), files, recognizer.MockRecognizer{})
-	handler := api.New(application, "", nil).Routes()
+	handler := authedHandler(t, api.New(application, "", nil).Routes())
 
 	create := authorAPIRequest(t, handler, http.MethodPost, "/api/author-profiles", map[string]any{"name": "鲁迅", "notes": "测试档案"})
 	if create.Code != http.StatusCreated {

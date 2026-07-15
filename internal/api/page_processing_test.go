@@ -41,7 +41,7 @@ func TestPageProcessingEndpointsStartAndPreviewDerivedImage(t *testing.T) {
 	if err != nil || len(pages) != 1 {
 		t.Fatalf("pages = %+v, err = %v", pages, err)
 	}
-	server := api.New(application, "", nil).Routes()
+	server := authedHandler(t, api.New(application, "", nil).Routes())
 	req := httptest.NewRequest(http.MethodPost, "/api/documents/"+doc.ID+"/page-processing-runs", bytes.NewBufferString(`{"config":{"auto_crop":true,"normalize_background":true,"deskew":true,"enhance_contrast":true,"detect_segments":true}}`))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()

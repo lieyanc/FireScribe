@@ -55,8 +55,9 @@ func TestPromptLibraryImportsCreatesActivatesAndTracksExternalEdits(t *testing.T
 	runtime := config.NewRuntime(cfg)
 	application := app.New(app.NewStore(conn), files, recognizer.MockRecognizer{})
 	router := New(application, "", runtime, UpdateRuntime{Config: updater.Config{AdminToken: "secret"}}).Routes()
+	session := testSessionCookie(t, router)
 
-	versions := requestPromptVersions(t, router)
+	versions := requestPromptVersions(t, router, session)
 	if len(versions) != 1 || !versions[0].IsActive || versions[0].Version != "legacy-v1" || versions[0].Content != "第一版提示词" {
 		t.Fatalf("initial versions = %#v", versions)
 	}
@@ -92,7 +93,7 @@ func TestPromptLibraryImportsCreatesActivatesAndTracksExternalEdits(t *testing.T
 	if err := os.WriteFile(promptPath, []byte("外部直接编辑"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	versions = requestPromptVersions(t, router)
+	versions = requestPromptVersions(t, router, session)
 	if len(versions) != 3 || versions[0].Version != "library-v2" || versions[0].Content != "外部直接编辑" || !versions[0].IsActive {
 		t.Fatalf("versions after direct edit = %#v", versions)
 	}
@@ -108,7 +109,7 @@ func TestPromptLibraryImportsCreatesActivatesAndTracksExternalEdits(t *testing.T
 	if res.Code != http.StatusOK {
 		t.Fatalf("legacy settings PUT status = %d, body = %s", res.Code, res.Body.String())
 	}
-	versions = requestPromptVersions(t, router)
+	versions = requestPromptVersions(t, router, session)
 	if versions[0].Version != "legacy-v3" || versions[0].Content != "第三版提示词" || !versions[0].IsActive {
 		t.Fatalf("versions after legacy PUT = %#v", versions)
 	}
@@ -136,9 +137,10 @@ func TestPromptLibraryRejectsDuplicateSnapshot(t *testing.T) {
 	}
 }
 
-func requestPromptVersions(t *testing.T, handler http.Handler) []app.PromptVersion {
+func requestPromptVersions(t *testing.T, handler http.Handler, session *http.Cookie) []app.PromptVersion {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/prompts", nil)
+	req.AddCookie(session)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {

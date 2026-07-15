@@ -37,7 +37,7 @@ func TestImportEndpointQueuesJobWithoutBreakingDocumentShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := app.New(app.NewStore(conn), files, recognizer.MockRecognizer{})
-	server := api.New(application, "", nil)
+	server := authedHandler(t, api.New(application, "", nil).Routes())
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -58,7 +58,7 @@ func TestImportEndpointQueuesJobWithoutBreakingDocumentShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/documents/import", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	recorder := httptest.NewRecorder()
-	server.Routes().ServeHTTP(recorder, req)
+	server.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -84,7 +84,7 @@ func TestImportEndpointQueuesJobWithoutBreakingDocumentShape(t *testing.T) {
 		if job.Status == "succeeded" {
 			eventsReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+response.Job.ID+"/events", nil)
 			eventsRecorder := httptest.NewRecorder()
-			server.Routes().ServeHTTP(eventsRecorder, eventsReq)
+			server.ServeHTTP(eventsRecorder, eventsReq)
 			if eventsRecorder.Code != http.StatusOK {
 				t.Fatalf("events status = %d, body = %s", eventsRecorder.Code, eventsRecorder.Body.String())
 			}
@@ -128,12 +128,12 @@ func TestExportEndpointAcceptsAdvancedOptions(t *testing.T) {
 	if _, err := application.SaveTextVersion(ctx, app.TextVersion{DocumentID: doc.ID, PageID: pages[0].ID, Kind: "final", Status: "verified", Text: "接口导出定稿"}); err != nil {
 		t.Fatal(err)
 	}
-	server := api.New(application, "", nil)
+	server := authedHandler(t, api.New(application, "", nil).Routes())
 	requestBody := `{"format":"docx","include_page_numbers":true,"text_scope":"final","include_annotations":true,"include_uncertain":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/documents/"+doc.ID+"/exports", strings.NewReader(requestBody))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-	server.Routes().ServeHTTP(recorder, req)
+	server.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}

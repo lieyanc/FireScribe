@@ -38,7 +38,7 @@ func TestEvaluationAPI(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	handler := api.New(application, "", nil).Routes()
+	handler := authedHandler(t, api.New(application, "", nil).Routes())
 	response := authorAPIRequest(t, handler, http.MethodGet, "/api/evaluation?benchmark_only=false", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())

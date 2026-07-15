@@ -60,6 +60,7 @@ func TestProviderAdapterMutationsRequireAdminTokenAndNeverEchoSecret(t *testing.
 
 	list := httptest.NewRequest(http.MethodGet, "/api/provider-adapters", nil)
 	list.RemoteAddr = "192.0.2.20:12345"
+	list.AddCookie(testSessionCookie(t, router))
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, list)
 	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), "provider-secret") || strings.Contains(listRecorder.Body.String(), `"secret"`) {

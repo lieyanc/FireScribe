@@ -40,8 +40,10 @@ func TestAlignedCandidateMergeAPIExposesSourcesAndSegments(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := New(application, "", nil, UpdateRuntime{}).Routes()
+	session := testSessionCookie(t, router)
 	request := httptest.NewRequest(http.MethodPost, "/api/pages/page-align/candidate-merges", strings.NewReader(`{"segments":[{"source_result_id":"result-align","source_start":0,"source_end":2,"text":"甲乙"}]}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(session)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusCreated {
@@ -52,7 +54,9 @@ func TestAlignedCandidateMergeAPIExposesSourcesAndSegments(t *testing.T) {
 		t.Fatal(err)
 	}
 	getRecorder := httptest.NewRecorder()
-	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/text-versions/"+created.TextVersionID+"/candidate-merge", nil))
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/text-versions/"+created.TextVersionID+"/candidate-merge", nil)
+	getRequest.AddCookie(session)
+	router.ServeHTTP(getRecorder, getRequest)
 	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"source_result_id":"result-align"`) || !strings.Contains(getRecorder.Body.String(), `"sources":[`) {
 		t.Fatalf("get status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
 	}
@@ -100,6 +104,7 @@ func TestRecognizerProfileMutationsRequireAdminTokenAndNeverEchoKey(t *testing.T
 
 	listRequest := httptest.NewRequest(http.MethodGet, "/api/recognizer-profiles", nil)
 	listRequest.RemoteAddr = "192.0.2.10:12345"
+	listRequest.AddCookie(testSessionCookie(t, router))
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, listRequest)
 	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), "provider-secret") || strings.Contains(listRecorder.Body.String(), `"api_key"`) {
@@ -136,6 +141,7 @@ func TestMalformedRecognitionRequestDoesNotStartJob(t *testing.T) {
 	router := New(application, "", nil).Routes()
 	request := httptest.NewRequest(http.MethodPost, "/api/documents/doc_bad_request/recognition-runs", strings.NewReader(`{"image_source":`))
 	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(testSessionCookie(t, router))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
