@@ -128,8 +128,30 @@ export type RecognitionRun = {
   created_at: string;
 };
 
+export type LLMProvider = {
+  id: string;
+  name: string;
+  driver: "openai-compatible" | "mock";
+  base_url: string;
+  api_key_set: boolean;
+  model_count: number;
+  models?: RecognizerProfile[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type LLMProviderInput = {
+  name: string;
+  driver: "openai-compatible" | "mock";
+  base_url?: string;
+  api_key?: string;
+};
+
+/** A model under an LLM provider. IDs remain compatible with recognition_runs.recognizer_profile_id. */
 export type RecognizerProfile = {
   id: string;
+  provider_id: string;
+  provider_name?: string;
   name: string;
   driver: "openai-compatible" | "mock";
   base_url: string;
@@ -144,15 +166,19 @@ export type RecognizerProfile = {
   updated_at: string;
 };
 
-export type RecognizerProfileInput = {
+export type LLMModelInput = {
   name: string;
-  driver: "openai-compatible" | "mock";
-  base_url?: string;
-  api_key?: string;
   model?: string;
   params_json?: string;
   prompt_version_id?: string;
   is_default?: boolean;
+};
+
+export type RecognizerProfileInput = LLMModelInput & {
+  provider_id?: string;
+  driver?: "openai-compatible" | "mock";
+  base_url?: string;
+  api_key?: string;
 };
 
 export type ProviderAdapter = {
@@ -316,16 +342,7 @@ export type RunPage = {
   finished_at: string;
 };
 
-export type OpenAISettings = {
-  base_url: string;
-  model: string;
-  api_key_set: boolean;
-  prompt_version: string;
-  temperature: number;
-  max_tokens: number;
-  max_image_edge: number;
-  retry_attempts: number;
-};
+
 
 export type PromptVersion = {
   id: string;
@@ -421,20 +438,16 @@ export type AuthorRecognitionMetrics = {
 };
 
 export type Settings = {
-  use_mock_ocr: boolean;
   request_timeout_seconds: number;
   pdf_render_dpi: number;
   prompt_path: string;
   prompt: string;
-  openai: OpenAISettings;
 };
 
 export type SettingsInput = {
-  use_mock_ocr?: boolean;
   request_timeout_seconds?: number;
   pdf_render_dpi?: number;
   prompt?: string;
-  openai?: Partial<Omit<OpenAISettings, "api_key_set">> & { api_key?: string };
 };
 
 export type RecognitionResult = {
@@ -1105,11 +1118,67 @@ export function startRecognition(documentID: string, options?: {
   });
 }
 
+export function listLLMProviders(includeModels = false) {
+  const query = includeModels ? "?include_models=1" : "";
+  return apiFetch<LLMProvider[]>(`/api/llm-providers${query}`);
+}
+
+export function createLLMProvider(input: LLMProviderInput) {
+  return apiFetch<LLMProvider>("/api/llm-providers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateLLMProvider(id: string, input: LLMProviderInput) {
+  return apiFetch<LLMProvider>(`/api/llm-providers/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteLLMProvider(id: string) {
+  return apiFetch<void>(`/api/llm-providers/${id}`, { method: "DELETE" });
+}
+
+export function listLLMModels(providerID?: string) {
+  if (providerID) {
+    return apiFetch<RecognizerProfile[]>(`/api/llm-providers/${providerID}/models`);
+  }
+  return apiFetch<RecognizerProfile[]>("/api/llm-models");
+}
+
+export function createLLMModel(providerID: string, input: LLMModelInput) {
+  return apiFetch<RecognizerProfile>(`/api/llm-providers/${providerID}/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateLLMModel(id: string, input: LLMModelInput) {
+  return apiFetch<RecognizerProfile>(`/api/llm-models/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteLLMModel(id: string) {
+  return apiFetch<void>(`/api/llm-models/${id}`, { method: "DELETE" });
+}
+
+/** @deprecated Prefer listLLMModels; kept as a flat model list for run selectors. */
 export function listRecognizerProfiles() {
-  return apiFetch<RecognizerProfile[]>("/api/recognizer-profiles");
+  return listLLMModels();
 }
 
 export function createRecognizerProfile(input: RecognizerProfileInput) {
+  if (input.provider_id) {
+    return createLLMModel(input.provider_id, input);
+  }
   return apiFetch<RecognizerProfile>("/api/recognizer-profiles", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1118,15 +1187,11 @@ export function createRecognizerProfile(input: RecognizerProfileInput) {
 }
 
 export function updateRecognizerProfile(id: string, input: RecognizerProfileInput) {
-  return apiFetch<RecognizerProfile>(`/api/recognizer-profiles/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  return updateLLMModel(id, input);
 }
 
 export function deleteRecognizerProfile(id: string) {
-  return apiFetch<void>(`/api/recognizer-profiles/${id}`, { method: "DELETE" });
+  return deleteLLMModel(id);
 }
 
 export function listProviderAdapters() {

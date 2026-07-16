@@ -1450,7 +1450,7 @@ function DiffView({
   onAlignedMerge,
 }: {
   results: RecognitionResult[];
-  profiles: Array<{ id: string; name: string }>;
+  profiles: Array<{ id: string; name: string; provider_name?: string }>;
   isMerging: boolean;
   onMerge: (resultIDs: string[], profileID: string) => void;
   onAlignedMerge: (segments: AlignedSegmentInput[]) => void;
@@ -1507,8 +1507,12 @@ function DiffView({
               <Select value={mergeProfileID} onValueChange={setMergeProfileID}>
                 <SelectTrigger id="merge-profile"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">默认识别器</SelectItem>
-                  {profiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}
+                  <SelectItem value="default">默认模型</SelectItem>
+                  {profiles.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>
+                      {profile.provider_name ? `${profile.provider_name} · ` : ""}{profile.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

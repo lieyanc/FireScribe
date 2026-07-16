@@ -48,9 +48,17 @@ func main() {
 	}
 	application := app.New(store, files, recognizer.Build(cfg))
 	application.SetOptions(app.Options{PDFRenderDPI: cfg.PDFRenderDPI})
+	if err := application.SeedLLMProvidersFromConfig(context.Background(),
+		cfg.UseMockOCR, cfg.OpenAI.BaseURL, cfg.OpenAI.APIKey, cfg.OpenAI.Model,
+		cfg.OpenAI.Temperature, cfg.OpenAI.MaxTokens, cfg.OpenAI.MaxImageEdge, cfg.OpenAI.RetryAttempts,
+	); err != nil {
+		log.Fatalf("seed llm providers: %v", err)
+	}
 
 	runtime := config.NewRuntime(cfg)
 	runtime.OnApply(func(next config.Config) {
+		// Legacy config.json openai block is only a bootstrap fallback; recognition
+		// prefers LLM provider models. Keep the runtime recognizer for empty-default cases.
 		application.SetRecognizer(recognizer.Build(next))
 		application.SetOptions(app.Options{PDFRenderDPI: next.PDFRenderDPI})
 	})

@@ -88,32 +88,105 @@ func (a *App) MergeAlignedCandidates(ctx context.Context, pageID string, inputs 
 	return merge, nil
 }
 
+func (a *App) SaveLLMProvider(ctx context.Context, provider LLMProvider) (LLMProvider, error) {
+	provider.ID = strings.TrimSpace(provider.ID)
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.Driver = strings.TrimSpace(provider.Driver)
+	provider.BaseURL = strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/")
+	if provider.Name == "" {
+		return LLMProvider{}, errors.New("provider name is required")
+	}
+	if len([]rune(provider.Name)) > 128 {
+		return LLMProvider{}, errors.New("provider name must not exceed 128 characters")
+	}
+	if provider.Driver == "" {
+		provider.Driver = recognizer.DriverOpenAICompatible
+	}
+	if provider.Driver != recognizer.DriverOpenAICompatible && provider.Driver != recognizer.DriverMock {
+		return LLMProvider{}, fmt.Errorf("unsupported provider driver %q", provider.Driver)
+	}
+	if provider.Driver == recognizer.DriverOpenAICompatible {
+		if provider.BaseURL == "" {
+			return LLMProvider{}, errors.New("base_url is required for openai-compatible providers")
+		}
+		if !strings.HasPrefix(provider.BaseURL, "http://") && !strings.HasPrefix(provider.BaseURL, "https://") {
+			return LLMProvider{}, errors.New("base_url must start with http:// or https://")
+		}
+	} else {
+		provider.BaseURL = ""
+		provider.APIKey = ""
+	}
+	if provider.ID == "" {
+		provider.ID = newID("llmp")
+	} else if current, err := a.Store.GetLLMProvider(ctx, provider.ID); err == nil {
+		if strings.TrimSpace(provider.APIKey) == "" {
+			provider.APIKey = current.APIKey
+		}
+		provider.CreatedAt = current.CreatedAt
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return LLMProvider{}, err
+	}
+	if provider.Driver == recognizer.DriverOpenAICompatible && strings.TrimSpace(provider.APIKey) == "" {
+		return LLMProvider{}, errors.New("api_key is required for openai-compatible providers")
+	}
+	return a.Store.SaveLLMProvider(ctx, provider)
+}
+
+func (a *App) DeleteLLMProvider(ctx context.Context, id string) error {
+	return a.Store.DeleteLLMProvider(ctx, id)
+}
+
+// SaveRecognizerProfile saves a model under an LLM provider. Credentials and
+// base_url live on the provider; the model only stores model id + params.
 func (a *App) SaveRecognizerProfile(ctx context.Context, profile RecognizerProfile) (RecognizerProfile, error) {
 	profile.ID = strings.TrimSpace(profile.ID)
+	profile.ProviderID = strings.TrimSpace(profile.ProviderID)
 	profile.Name = strings.TrimSpace(profile.Name)
-	profile.Driver = strings.TrimSpace(profile.Driver)
-	profile.BaseURL = strings.TrimRight(strings.TrimSpace(profile.BaseURL), "/")
 	profile.Model = strings.TrimSpace(profile.Model)
 	profile.ParamsJSON = strings.TrimSpace(profile.ParamsJSON)
 	profile.PromptVersionID = strings.TrimSpace(profile.PromptVersionID)
+
+	// Backward-compatible path: flat create with base_url/api_key still works by
+	// ensuring a provider exists first (tests and older clients).
+	if profile.ProviderID == "" {
+		provider, err := a.ensureProviderForLegacyProfile(ctx, profile)
+		if err != nil {
+			return RecognizerProfile{}, err
+		}
+		profile.ProviderID = provider.ID
+		profile.Driver = provider.Driver
+		profile.BaseURL = provider.BaseURL
+		profile.APIKey = provider.APIKey
+	}
+
+	provider, err := a.Store.GetLLMProvider(ctx, profile.ProviderID)
+	if err != nil {
+		return RecognizerProfile{}, fmt.Errorf("load provider: %w", err)
+	}
+	profile.Driver = provider.Driver
+	profile.BaseURL = provider.BaseURL
+	profile.APIKey = provider.APIKey
+	profile.APIKeySet = provider.APIKeySet
+	profile.ProviderName = provider.Name
+
 	if profile.Name == "" {
-		return RecognizerProfile{}, errors.New("profile name is required")
+		return RecognizerProfile{}, errors.New("model name is required")
 	}
 	if len([]rune(profile.Name)) > 128 {
-		return RecognizerProfile{}, errors.New("profile name must not exceed 128 characters")
+		return RecognizerProfile{}, errors.New("model name must not exceed 128 characters")
 	}
 	if profile.ID == "" {
 		profile.ID = newID("recp")
 	} else if current, err := a.Store.GetRecognizerProfile(ctx, profile.ID); err == nil {
-		if strings.TrimSpace(profile.APIKey) == "" {
-			profile.APIKey = current.APIKey
-		}
 		profile.CreatedAt = current.CreatedAt
+		if profile.ProviderID == "" {
+			profile.ProviderID = current.ProviderID
+		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return RecognizerProfile{}, err
 	}
-	if profile.Driver != recognizer.DriverOpenAICompatible {
-		profile.APIKey = ""
+	if profile.Driver == recognizer.DriverOpenAICompatible && profile.Model == "" {
+		return RecognizerProfile{}, errors.New("model is required for openai-compatible providers")
 	}
 	if profile.ParamsJSON == "" {
 		profile.ParamsJSON = `{"temperature":0,"max_tokens":4096,"max_image_edge":0,"retry_attempts":3,"timeout_seconds":120}`
@@ -143,6 +216,91 @@ func (a *App) SaveRecognizerProfile(ctx context.Context, profile RecognizerProfi
 		return RecognizerProfile{}, err
 	}
 	return a.Store.SaveRecognizerProfile(ctx, profile)
+}
+
+func (a *App) ensureProviderForLegacyProfile(ctx context.Context, profile RecognizerProfile) (LLMProvider, error) {
+	driver := strings.TrimSpace(profile.Driver)
+	if driver == "" {
+		driver = recognizer.DriverOpenAICompatible
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(profile.BaseURL), "/")
+	apiKey := strings.TrimSpace(profile.APIKey)
+
+	// Reuse an existing provider with the same interface credentials when possible.
+	providers, err := a.Store.ListLLMProviders(ctx)
+	if err != nil {
+		return LLMProvider{}, err
+	}
+	for _, item := range providers {
+		if item.Driver == driver && item.BaseURL == baseURL && (apiKey == "" || item.APIKey == apiKey || !item.APIKeySet) {
+			if apiKey != "" && item.APIKey != apiKey {
+				item.APIKey = apiKey
+				return a.SaveLLMProvider(ctx, item)
+			}
+			return item, nil
+		}
+	}
+	name := providerNameFromLegacy(profile.Name, driver, baseURL)
+	return a.SaveLLMProvider(ctx, LLMProvider{
+		Name: name, Driver: driver, BaseURL: baseURL, APIKey: apiKey,
+	})
+}
+
+// SeedLLMProvidersFromConfig creates a default provider+model from legacy
+// config.json openai settings when the database has no providers yet.
+func (a *App) SeedLLMProvidersFromConfig(ctx context.Context, useMock bool, baseURL, apiKey, model string, temperature float64, maxTokens, maxImageEdge, retryAttempts int) error {
+	if _, err := a.Store.MigrateProfilesToLLMProviders(ctx); err != nil {
+		return fmt.Errorf("migrate profiles to providers: %w", err)
+	}
+	providers, err := a.Store.ListLLMProviders(ctx)
+	if err != nil {
+		return err
+	}
+	if len(providers) > 0 {
+		return nil
+	}
+	models, err := a.Store.ListRecognizerProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	if len(models) > 0 {
+		return nil
+	}
+
+	driver := recognizer.DriverOpenAICompatible
+	name := "默认接口"
+	if useMock || strings.TrimSpace(apiKey) == "" || strings.TrimSpace(model) == "" {
+		driver = recognizer.DriverMock
+		name = "Mock"
+		baseURL = ""
+		apiKey = ""
+		model = "mock"
+	}
+	provider, err := a.SaveLLMProvider(ctx, LLMProvider{
+		Name: name, Driver: driver, BaseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), APIKey: strings.TrimSpace(apiKey),
+	})
+	if err != nil {
+		return err
+	}
+	params, _ := json.Marshal(map[string]any{
+		"temperature":     temperature,
+		"max_tokens":      maxTokens,
+		"max_image_edge":  maxImageEdge,
+		"retry_attempts":  retryAttempts,
+		"timeout_seconds": 120,
+	})
+	displayName := model
+	if displayName == "" {
+		displayName = "默认模型"
+	}
+	_, err = a.SaveRecognizerProfile(ctx, RecognizerProfile{
+		ProviderID: provider.ID,
+		Name:       displayName,
+		Model:      model,
+		ParamsJSON: string(params),
+		IsDefault:  true,
+	})
+	return err
 }
 
 func (a *App) SaveProviderAdapter(ctx context.Context, adapter ProviderAdapter) (ProviderAdapter, error) {

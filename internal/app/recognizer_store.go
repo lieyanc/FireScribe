@@ -9,72 +9,49 @@ import (
 	"strings"
 )
 
-func (s *Store) ListRecognizerProfiles(ctx context.Context) ([]RecognizerProfile, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT p.id, p.name, p.driver, p.base_url, p.api_key, p.model, p.params_json,
+const recognizerProfileSelect = `
+		SELECT p.id, COALESCE(p.provider_id, ''), COALESCE(lp.name, ''),
+		       p.name, COALESCE(lp.driver, p.driver), COALESCE(lp.base_url, p.base_url),
+		       p.api_key, p.model, p.params_json,
 		       COALESCE(p.prompt_version_id, ''), COALESCE(v.version, ''), COALESCE(v.sha256, ''),
 		       p.is_default, p.created_at, p.updated_at
 		FROM recognizer_profiles p
+		LEFT JOIN llm_providers lp ON lp.id = p.provider_id
 		LEFT JOIN prompt_versions v ON v.id = p.prompt_version_id
+`
+
+func (s *Store) ListRecognizerProfiles(ctx context.Context) ([]RecognizerProfile, error) {
+	rows, err := s.db.QueryContext(ctx, recognizerProfileSelect+`
 		ORDER BY p.is_default DESC, p.updated_at DESC, p.name
 	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	profiles := []RecognizerProfile{}
-	for rows.Next() {
-		profile, err := scanRecognizerProfile(rows)
-		if err != nil {
-			return nil, err
-		}
-		profile.APIKey = s.profileSecret(profile.ID, profile.APIKey)
-		profile.APIKeySet = strings.TrimSpace(profile.APIKey) != ""
-		profiles = append(profiles, profile)
-	}
-	return profiles, rows.Err()
+	return scanRecognizerProfiles(rows, s)
 }
 
 func (s *Store) GetRecognizerProfile(ctx context.Context, id string) (RecognizerProfile, error) {
-	profile, err := scanRecognizerProfile(s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.name, p.driver, p.base_url, p.api_key, p.model, p.params_json,
-		       COALESCE(p.prompt_version_id, ''), COALESCE(v.version, ''), COALESCE(v.sha256, ''),
-		       p.is_default, p.created_at, p.updated_at
-		FROM recognizer_profiles p
-		LEFT JOIN prompt_versions v ON v.id = p.prompt_version_id
-		WHERE p.id = ?
-	`, id))
+	profile, err := scanRecognizerProfile(s.db.QueryRowContext(ctx, recognizerProfileSelect+` WHERE p.id = ?`, id))
 	if err == nil {
-		profile.APIKey = s.profileSecret(profile.ID, profile.APIKey)
-		profile.APIKeySet = strings.TrimSpace(profile.APIKey) != ""
+		s.hydrateProfileSecret(&profile)
 	}
 	return profile, err
 }
 
 func (s *Store) DefaultRecognizerProfile(ctx context.Context) (RecognizerProfile, bool, error) {
-	profile, err := scanRecognizerProfile(s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.name, p.driver, p.base_url, p.api_key, p.model, p.params_json,
-		       COALESCE(p.prompt_version_id, ''), COALESCE(v.version, ''), COALESCE(v.sha256, ''),
-		       p.is_default, p.created_at, p.updated_at
-		FROM recognizer_profiles p
-		LEFT JOIN prompt_versions v ON v.id = p.prompt_version_id
-		WHERE p.is_default = 1
-	`))
+	profile, err := scanRecognizerProfile(s.db.QueryRowContext(ctx, recognizerProfileSelect+` WHERE p.is_default = 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RecognizerProfile{}, false, nil
 	}
 	if err == nil {
-		profile.APIKey = s.profileSecret(profile.ID, profile.APIKey)
-		profile.APIKeySet = strings.TrimSpace(profile.APIKey) != ""
+		s.hydrateProfileSecret(&profile)
 	}
 	return profile, err == nil, err
 }
 
 func (s *Store) SaveRecognizerProfile(ctx context.Context, profile RecognizerProfile) (RecognizerProfile, error) {
-	databaseSecret, err := s.saveProfileSecret(profile.ID, profile.APIKey)
-	if err != nil {
-		return RecognizerProfile{}, err
-	}
+	// Secrets belong on the provider. Never persist api_key on the model row.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return RecognizerProfile{}, err
@@ -91,26 +68,28 @@ func (s *Store) SaveRecognizerProfile(ctx context.Context, profile RecognizerPro
 	profile.UpdatedAt = now()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO recognizer_profiles(id, name, driver, base_url, api_key, model, params_json,
-		       prompt_version_id, is_default, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+		       prompt_version_id, is_default, created_at, updated_at, provider_id)
+		VALUES (?, ?, ?, '', '', ?, ?, NULLIF(?, ''), ?, ?, ?, NULLIF(?, ''))
 		ON CONFLICT(id) DO UPDATE SET
 		  name = excluded.name,
 		  driver = excluded.driver,
-		  base_url = excluded.base_url,
-		  api_key = excluded.api_key,
+		  base_url = '',
+		  api_key = '',
 		  model = excluded.model,
 		  params_json = excluded.params_json,
 		  prompt_version_id = excluded.prompt_version_id,
 		  is_default = excluded.is_default,
-		  updated_at = excluded.updated_at
-	`, profile.ID, profile.Name, profile.Driver, profile.BaseURL, databaseSecret, profile.Model,
-		profile.ParamsJSON, profile.PromptVersionID, profile.IsDefault, profile.CreatedAt, profile.UpdatedAt)
+		  updated_at = excluded.updated_at,
+		  provider_id = excluded.provider_id
+	`, profile.ID, profile.Name, profile.Driver, profile.Model,
+		profile.ParamsJSON, profile.PromptVersionID, profile.IsDefault, profile.CreatedAt, profile.UpdatedAt, profile.ProviderID)
 	if err != nil {
 		return RecognizerProfile{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return RecognizerProfile{}, err
 	}
+	_ = s.deleteProfileSecret(profile.ID)
 	return s.GetRecognizerProfile(ctx, profile.ID)
 }
 
@@ -231,10 +210,36 @@ func (s *Store) GetCandidateMergeByTextVersion(ctx context.Context, textVersionI
 	return merge, nil
 }
 
+func (s *Store) hydrateProfileSecret(profile *RecognizerProfile) {
+	if profile.ProviderID != "" {
+		profile.APIKey = s.providerSecret(profile.ProviderID)
+		if strings.TrimSpace(profile.APIKey) == "" {
+			// Fall back to legacy profile vault while migration is mid-flight.
+			profile.APIKey = s.profileSecret(profile.ID, "")
+		}
+	} else {
+		profile.APIKey = s.profileSecret(profile.ID, profile.APIKey)
+	}
+	profile.APIKeySet = strings.TrimSpace(profile.APIKey) != ""
+}
+
+func scanRecognizerProfiles(rows *sql.Rows, store *Store) ([]RecognizerProfile, error) {
+	profiles := []RecognizerProfile{}
+	for rows.Next() {
+		profile, err := scanRecognizerProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		store.hydrateProfileSecret(&profile)
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
+}
+
 func scanRecognizerProfile(scanner interface{ Scan(...any) error }) (RecognizerProfile, error) {
 	var profile RecognizerProfile
 	var isDefault int
-	err := scanner.Scan(&profile.ID, &profile.Name, &profile.Driver, &profile.BaseURL, &profile.APIKey,
+	err := scanner.Scan(&profile.ID, &profile.ProviderID, &profile.ProviderName, &profile.Name, &profile.Driver, &profile.BaseURL, &profile.APIKey,
 		&profile.Model, &profile.ParamsJSON, &profile.PromptVersionID, &profile.PromptVersion, &profile.PromptSHA256,
 		&isDefault, &profile.CreatedAt, &profile.UpdatedAt)
 	profile.APIKeySet = strings.TrimSpace(profile.APIKey) != ""

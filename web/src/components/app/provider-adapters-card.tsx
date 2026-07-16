@@ -152,9 +152,9 @@ export function ProviderAdaptersCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Provider Adapters</CardTitle>
+        <CardTitle>通用 HTTP 适配器</CardTitle>
         <CardDescription>
-          以纯数据配置外部识别服务的请求与响应映射。Adapter 不加载插件代码，密钥只写入且不回显。
+          非 OpenAI 兼容协议时使用：以纯数据配置外部识别服务的请求与响应映射。与上方「识别接口」不同；密钥只写不回显。
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(24rem,1.2fr)]">

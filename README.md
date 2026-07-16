@@ -114,13 +114,11 @@ Vite 开发服务会把 `/api` 代理到 `localhost:8080`。
 
 ## 插件化识别器与候选合并
 
-- 设置页可维护多个数据型 Recognizer Profile；内置 allow-list 只支持 `openai-compatible` 与 `mock` 驱动，不加载动态库、不执行 Profile 指定的本地命令或任意代码。
-- OpenAI-compatible Profile 可分别保存 `base_url`、API Key、模型、参数 JSON 和默认 Prompt 版本。数据库中的 `api_key`/`secret` 字段保持为空，实际凭据写入数据目录下权限为 `0600` 的 `secrets.json`；升级时已有数据库明文会自动迁出并清空。列表/API 响应和 run/experiment 快照只返回 secret-set 状态，不回显密钥明文。
-- 另可创建 data-only Provider Adapter。当前只开放内置 `generic-http-json` 引擎：配置 HTTPS endpoint、模型、`none`/Bearer/`X-API-Key` 认证、超时、固定 JSON 字段路径和静态 JSON 字段；请求统一包含 Prompt、页面图的 base64/data URL 和文档/页元数据，响应按配置路径规范化出正文、置信度与 provider metadata，同时完整保留原始 JSON。Adapter manifest 不能引用本地文件、命令、模板脚本或动态代码。
-- Provider Adapter 密钥只写不回显，也不会进入 run snapshot。其增删改与 Profile/Prompt/Settings 一样受 `update.admin_token`（未配置时仅 localhost）保护。Endpoint 必须是无 userinfo/query/fragment 的 HTTPS URL；服务端拒绝 localhost、私网/保留 IP，并在连接时再次检查 DNS 结果、禁用代理和重定向。该限制只是基础 SSRF 防线，仍应只配置由部署者信任的 OCR/VLM endpoint。
-- 启动单次识别时可选择 Profile 或 Provider Adapter，并组合不可变 Prompt 版本与原图/增强图；旧版空请求仍兼容，优先使用默认 Profile，未配置时继续使用全局 Settings 和当前激活 Prompt。
-- 每个 recognition run 固化 driver、Profile/Adapter ID、脱敏配置、Prompt 正文/ID/SHA-256、有界作者 prompt 上下文和图像来源。失败页重试从该不可变快照重建 base URL、模型、参数、Prompt 和作者上下文；OpenAI/Profile 与 Provider Adapter 只从现存记录取当前密钥，记录已删除或密钥缺失时明确失败，不会静默改用默认 Profile。Mock 可在 Profile 删除后仅凭快照复现。
-- 文档详情页可创建同页多 Variant 的 Prompt/Profile/Adapter A/B 实验。创建时每个 Variant 都固化脱敏配置、Prompt 和作者上下文，排队或重试不会受后续 Profile/Adapter 修改影响，只读取当前同一记录的密钥；一个 `recognition_experiment` 后台任务按顺序启动各 Variant，复用现有同文档单活跃 run 约束。实验会在子 run 启动时以同一数据库事务保存关联 run ID，并分别保留历史 `run_ids` 与当前尝试 `current_run_ids`：前者用于完整 provenance，后者用于本次平均置信度、耗时和人工编辑距离，重试不会重复累计旧尝试。最后可显式选择 winner；重启会同步终结 job、experiment 和 variant。单次 recognition run API 保持兼容。
+- 设置页以 **接口（LLM Provider）+ 模型** 两层管理识别配置：接口保存 `base_url`、驱动与 API Key；同一接口下可挂多个模型（模型 ID、参数 JSON、默认 Prompt、是否默认）。内置 allow-list 只支持 `openai-compatible` 与 `mock`，不加载动态库、不执行本地命令或任意代码。
+- 密钥写在数据目录 `secrets.json`（`0600`），库表不存明文；列表/API/run 快照只返回 `api_key_set`。历史 flat Profile 与 `config.json` 中的 openai 配置会在启动时迁移/种子化为接口+模型。
+- 另可创建 data-only 通用 HTTP 适配器（`generic-http-json`）：HTTPS endpoint、认证、超时与 JSON 路径映射。与 OpenAI 兼容「接口」不同，用于非 OpenAI 协议；密钥同样只写不回显，并受 admin 保护与 SSRF 基础限制。
+- 启动识别时可选择模型或 HTTP 适配器，并组合 Prompt 版本与原图/增强图；空请求使用默认模型，再回退到进程内 bootstrap recognizer。
+- 每个 recognition run 固化 driver、模型/Adapter ID、脱敏配置、Prompt 与作者上下文；失败重试从快照重建，密钥只从现存接口记录读取。文档详情页支持多 Variant A/B 实验，创建时固化脱敏配置，重试不重复累计旧尝试。
 - 校对页“分歧”面板可选择两个或更多 `recognition_result` 调用专用 `vlm_merge_candidates_v1` 保守合并。服务端只接受在来源候选中逐行原样可见的文本，检测到扩写或新行会拒绝且不创建版本；成功后保存 candidate `TextVersion`，并在 `candidate_merges` 中记录全部来源 result ID、Profile/driver、Prompt 版本/哈希、原始响应和自动推导的逐行来源血缘，低置信片段仍能映射到合并稿。
 - 分歧面板也支持按行或按段对齐两个识别结果，并为每一段人工选择来源；组合候选稿会逐段保存来源 result ID、顺序、来源 UTF-16 范围和输出 UTF-16 范围。版本历史会识别两类 candidate merge，展示完整来源、逐段血缘、Prompt/哈希，并可折叠查看 raw response。
 

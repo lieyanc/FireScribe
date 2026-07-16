@@ -680,16 +680,18 @@ export function DocumentDetailPage() {
             <SelectTrigger className="w-44" aria-label="识别来源"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="default">默认识别器</SelectItem>
+                <SelectItem value="default">默认模型</SelectItem>
               </SelectGroup>
               <SelectGroup>
                 {recognizerProfiles.data?.map((profile) => (
-                  <SelectItem key={profile.id} value={`profile:${profile.id}`}>Profile · {profile.name}</SelectItem>
+                  <SelectItem key={profile.id} value={`profile:${profile.id}`}>
+                    {profile.provider_name ? `${profile.provider_name} · ` : ""}{profile.name}
+                  </SelectItem>
                 ))}
               </SelectGroup>
               <SelectGroup>
                 {providerAdapters.data?.filter((adapter) => adapter.is_enabled).map((adapter) => (
-                  <SelectItem key={adapter.id} value={`adapter:${adapter.id}`}>Adapter · {adapter.name}</SelectItem>
+                  <SelectItem key={adapter.id} value={`adapter:${adapter.id}`}>HTTP · {adapter.name}</SelectItem>
                 ))}
               </SelectGroup>
             </SelectContent>
@@ -697,7 +699,7 @@ export function DocumentDetailPage() {
           <Select value={recognitionPromptID} onValueChange={setRecognitionPromptID}>
             <SelectTrigger className="w-40" aria-label="Prompt 版本"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="active">Profile 默认 / 激活版本</SelectItem>
+              <SelectItem value="active">模型默认 / 激活版本</SelectItem>
               {promptVersions.data?.map((prompt) => (
                 <SelectItem key={prompt.id} value={prompt.id}>{prompt.version}</SelectItem>
               ))}

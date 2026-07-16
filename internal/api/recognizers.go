@@ -11,11 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/lieyan/firescribe/internal/app"
-	"github.com/lieyan/firescribe/internal/recognizer"
 )
 
 type recognizerProfileInput struct {
 	Name            string `json:"name"`
+	ProviderID      string `json:"provider_id"`
 	Driver          string `json:"driver"`
 	BaseURL         string `json:"base_url"`
 	APIKey          string `json:"api_key"`
@@ -25,6 +25,7 @@ type recognizerProfileInput struct {
 	IsDefault       bool   `json:"is_default"`
 }
 
+// listRecognizerProfiles remains as a flat model list for run selectors.
 func (s *Server) listRecognizerProfiles(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.app.Store.ListRecognizerProfiles(r.Context())
 	if err != nil {
@@ -34,13 +35,6 @@ func (s *Server) listRecognizerProfiles(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, profiles)
 }
 
-func (s *Server) listRecognizerDrivers(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []map[string]string{
-		{"id": recognizer.DriverOpenAICompatible, "name": "OpenAI Compatible"},
-		{"id": recognizer.DriverMock, "name": "Mock"},
-	})
-}
-
 func (s *Server) createRecognizerProfile(w http.ResponseWriter, r *http.Request) {
 	var req recognizerProfileInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -48,7 +42,7 @@ func (s *Server) createRecognizerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	profile, err := s.app.SaveRecognizerProfile(r.Context(), app.RecognizerProfile{
-		Name: req.Name, Driver: req.Driver, BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model,
+		ProviderID: req.ProviderID, Name: req.Name, Driver: req.Driver, BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model,
 		ParamsJSON: req.ParamsJSON, PromptVersionID: req.PromptVersionID, IsDefault: req.IsDefault,
 	})
 	if err != nil {
@@ -60,7 +54,8 @@ func (s *Server) createRecognizerProfile(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) updateRecognizerProfile(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "profileID")
-	if _, err := s.app.Store.GetRecognizerProfile(r.Context(), id); err != nil {
+	current, err := s.app.Store.GetRecognizerProfile(r.Context(), id)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -69,8 +64,12 @@ func (s *Server) updateRecognizerProfile(w http.ResponseWriter, r *http.Request)
 		writeError(w, fmt.Errorf("parse recognizer profile: %w", err))
 		return
 	}
+	providerID := req.ProviderID
+	if providerID == "" {
+		providerID = current.ProviderID
+	}
 	profile, err := s.app.SaveRecognizerProfile(r.Context(), app.RecognizerProfile{
-		ID: id, Name: req.Name, Driver: req.Driver, BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model,
+		ID: id, ProviderID: providerID, Name: req.Name, Driver: req.Driver, BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model,
 		ParamsJSON: req.ParamsJSON, PromptVersionID: req.PromptVersionID, IsDefault: req.IsDefault,
 	})
 	if err != nil {

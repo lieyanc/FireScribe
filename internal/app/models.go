@@ -169,10 +169,28 @@ type RecognitionExperimentVariant struct {
 	FinishedAt         string   `json:"finished_at"`
 }
 
-// RecognizerProfile is a data-only configuration for an allow-listed driver.
-// APIKey is used internally and is never serialized back to clients.
+// LLMProvider is an API interface (base URL + credentials). Models hang under it.
+// APIKey is internal-only and never serialized to API clients.
+type LLMProvider struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Driver     string              `json:"driver"`
+	BaseURL    string              `json:"base_url"`
+	APIKey     string              `json:"-"`
+	APIKeySet  bool                `json:"api_key_set"`
+	ModelCount int                 `json:"model_count"`
+	Models     []RecognizerProfile `json:"models,omitempty"`
+	CreatedAt  string              `json:"created_at"`
+	UpdatedAt  string              `json:"updated_at"`
+}
+
+// RecognizerProfile is a model under an LLMProvider (display name + model id + params).
+// Driver/BaseURL/APIKey are hydrated from the parent provider for recognition.
+// The table name remains recognizer_profiles so historical run FKs stay valid.
 type RecognizerProfile struct {
 	ID              string `json:"id"`
+	ProviderID      string `json:"provider_id"`
+	ProviderName    string `json:"provider_name,omitempty"`
 	Name            string `json:"name"`
 	Driver          string `json:"driver"`
 	BaseURL         string `json:"base_url"`

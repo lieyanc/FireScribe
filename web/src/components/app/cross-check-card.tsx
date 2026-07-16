@@ -90,8 +90,8 @@ function conflictKindLabel(kind: string) {
 
 function variantSourceLabel(variant: CrossCheckVariant, profileNames: Map<string, string>, adapterNames: Map<string, string>) {
   if (variant.provider_adapter_id) return adapterNames.get(variant.provider_adapter_id) ?? "Provider Adapter";
-  if (variant.recognizer_profile_id) return profileNames.get(variant.recognizer_profile_id) ?? "Recognizer Profile";
-  return "默认识别器";
+  if (variant.recognizer_profile_id) return profileNames.get(variant.recognizer_profile_id) ?? "模型";
+  return "默认模型";
 }
 
 // 页可以直接采纳 = 全体一致、尚未采纳、也没有人工版本(人工工作永远不被覆盖)。
@@ -377,13 +377,15 @@ export function CrossCheckCard({ documentID, pages }: { documentID: string; page
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          <SelectLabel>Recognizer Profiles</SelectLabel>
+                          <SelectLabel>模型</SelectLabel>
                           {profiles.data?.map((profile) => (
-                            <SelectItem key={profile.id} value={`profile:${profile.id}`}>{profile.name}</SelectItem>
+                            <SelectItem key={profile.id} value={`profile:${profile.id}`}>
+                              {profile.provider_name ? `${profile.provider_name} · ` : ""}{profile.name}
+                            </SelectItem>
                           ))}
                         </SelectGroup>
                         <SelectGroup>
-                          <SelectLabel>Provider Adapters</SelectLabel>
+                          <SelectLabel>通用 HTTP 适配器</SelectLabel>
                           {enabledAdapters.map((adapter) => (
                             <SelectItem key={adapter.id} value={`adapter:${adapter.id}`}>{adapter.name}</SelectItem>
                           ))}

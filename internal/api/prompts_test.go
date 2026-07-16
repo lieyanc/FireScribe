@@ -98,20 +98,20 @@ func TestPromptLibraryImportsCreatesActivatesAndTracksExternalEdits(t *testing.T
 		t.Fatalf("versions after direct edit = %#v", versions)
 	}
 
-	// The legacy settings endpoint remains supported and also creates an
-	// auditable library snapshot.
-	settingsBody := []byte(`{"prompt":"第三版提示词","openai":{"prompt_version":"legacy-v3"}}`)
+	// Settings PUT can still update the active prompt file and snapshot it
+	// into the version library (model/API keys live under LLM providers now).
+	settingsBody := []byte(`{"prompt":"第三版提示词"}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(settingsBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Admin-Token", "secret")
 	res := httptest.NewRecorder()
 	router.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("legacy settings PUT status = %d, body = %s", res.Code, res.Body.String())
+		t.Fatalf("settings PUT status = %d, body = %s", res.Code, res.Body.String())
 	}
 	versions = requestPromptVersions(t, router, session)
-	if versions[0].Version != "legacy-v3" || versions[0].Content != "第三版提示词" || !versions[0].IsActive {
-		t.Fatalf("versions after legacy PUT = %#v", versions)
+	if versions[0].Content != "第三版提示词" || !versions[0].IsActive {
+		t.Fatalf("versions after settings PUT = %#v", versions)
 	}
 }
 

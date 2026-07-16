@@ -59,7 +59,7 @@ function newVariant(position: number): VariantDraft {
 function sourceLabel(variant: ExperimentVariant, profileNames: Map<string, string>, adapterNames: Map<string, string>) {
   const profileID = variant.recognizer_profile_id || variant.profile_id;
   if (variant.provider_adapter_id) return adapterNames.get(variant.provider_adapter_id) ?? "Provider Adapter";
-  if (profileID) return profileNames.get(profileID) ?? "Recognizer Profile";
+  if (profileID) return profileNames.get(profileID) ?? "模型";
   return "未记录来源";
 }
 
@@ -164,7 +164,7 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
           Prompt / Profile A/B 实验
         </CardTitle>
         <CardDescription>
-          在同一组页面上并行比较多个 Profile 或 Provider Adapter，可分别指定 Prompt 与原图/增强图，完成后显式选择 Winner。
+          在同一组页面上并行比较多个模型或通用 HTTP 适配器，可分别指定 Prompt 与原图/增强图，完成后显式选择 Winner。
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
@@ -243,13 +243,15 @@ export function RecognitionExperimentsCard({ documentID, pages }: { documentID: 
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          <SelectLabel>Recognizer Profiles</SelectLabel>
+                          <SelectLabel>模型</SelectLabel>
                           {profiles.data?.map((profile) => (
-                            <SelectItem key={profile.id} value={`profile:${profile.id}`}>{profile.name}</SelectItem>
+                            <SelectItem key={profile.id} value={`profile:${profile.id}`}>
+                              {profile.provider_name ? `${profile.provider_name} · ` : ""}{profile.name}
+                            </SelectItem>
                           ))}
                         </SelectGroup>
                         <SelectGroup>
-                          <SelectLabel>Provider Adapters</SelectLabel>
+                          <SelectLabel>通用 HTTP 适配器</SelectLabel>
                           {enabledAdapters.map((adapter) => (
                             <SelectItem key={adapter.id} value={`adapter:${adapter.id}`}>{adapter.name}</SelectItem>
                           ))}

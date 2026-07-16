@@ -34,80 +34,48 @@ import { Switch } from "../components/ui/switch";
 import { Textarea } from "../components/ui/textarea";
 import {
   activatePromptVersion,
-  createRecognizerProfile,
+  createLLMModel,
+  createLLMProvider,
   createPromptVersion,
-  deleteRecognizerProfile,
+  deleteLLMModel,
+  deleteLLMProvider,
   getSettings,
+  listLLMProviders,
   listPromptVersions,
-  listRecognizerProfiles,
-  updateRecognizerProfile,
+  updateLLMModel,
+  updateLLMProvider,
   updateSettings,
+  type LLMModelInput,
+  type LLMProvider,
+  type LLMProviderInput,
   type PromptVersion,
   type RecognizerProfile,
-  type RecognizerProfileInput,
   type Settings,
   type SettingsInput,
 } from "../lib/api";
 import { cn } from "../lib/utils";
 
 type FormState = {
-  use_mock_ocr: boolean;
   request_timeout_seconds: number;
   pdf_render_dpi: number;
-  base_url: string;
-  model: string;
-  temperature: number;
-  max_tokens: number;
-  max_image_edge: number;
-  retry_attempts: number;
 };
 
-type FormErrors = Partial<Record<keyof FormState | "api_key", string>>;
+type FormErrors = Partial<Record<keyof FormState, string>>;
 
 function toForm(settings: Settings): FormState {
   return {
-    use_mock_ocr: settings.use_mock_ocr,
     request_timeout_seconds: settings.request_timeout_seconds,
     pdf_render_dpi: settings.pdf_render_dpi,
-    base_url: settings.openai.base_url,
-    model: settings.openai.model,
-    temperature: settings.openai.temperature,
-    max_tokens: settings.openai.max_tokens,
-    max_image_edge: settings.openai.max_image_edge,
-    retry_attempts: settings.openai.retry_attempts,
   };
 }
 
-function validateForm(form: FormState, apiKey: string, apiKeySet: boolean): FormErrors {
+function validateForm(form: FormState): FormErrors {
   const errors: FormErrors = {};
-  const baseURL = form.base_url.trim();
-
   if (!Number.isInteger(form.request_timeout_seconds) || form.request_timeout_seconds < 10 || form.request_timeout_seconds > 3600) {
     errors.request_timeout_seconds = "请输入 10–3600 之间的整数秒数。";
   }
   if (!Number.isInteger(form.pdf_render_dpi) || form.pdf_render_dpi < 72) {
     errors.pdf_render_dpi = "请输入不小于 72 的整数 DPI。";
-  }
-  if (baseURL && !/^https?:\/\//i.test(baseURL)) {
-    errors.base_url = "Base URL 必须以 http:// 或 https:// 开头。";
-  }
-  if (!form.use_mock_ocr && !form.model.trim()) {
-    errors.model = "使用真实识别时必须填写模型名称。";
-  }
-  if (!form.use_mock_ocr && !apiKeySet && !apiKey.trim()) {
-    errors.api_key = "使用真实识别时必须配置 API Key。";
-  }
-  if (!Number.isFinite(form.temperature) || form.temperature < 0 || form.temperature > 2) {
-    errors.temperature = "请输入 0–2 之间的数值。";
-  }
-  if (!Number.isInteger(form.max_tokens) || form.max_tokens < 1) {
-    errors.max_tokens = "请输入不小于 1 的整数。";
-  }
-  if (!Number.isInteger(form.max_image_edge) || form.max_image_edge < 0) {
-    errors.max_image_edge = "请输入不小于 0 的整数。";
-  }
-  if (!Number.isInteger(form.retry_attempts) || form.retry_attempts < 0) {
-    errors.retry_attempts = "请输入不小于 0 的整数。";
   }
   return errors;
 }
@@ -121,29 +89,24 @@ export function SettingsPage() {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const [form, setForm] = useState<FormState | null>(null);
   const [baseline, setBaseline] = useState<FormState | null>(null);
-  const [apiKey, setApiKey] = useState("");
   const [reloadDialogOpen, setReloadDialogOpen] = useState(false);
 
-  // 后台 refetch 只更新查询缓存；首次载入、显式重载和保存成功才会替换编辑中的表单。
   useEffect(() => {
     if (settings.data && form === null) {
       const next = toForm(settings.data);
       setForm(next);
       setBaseline(next);
-      setApiKey("");
     }
   }, [form, settings.data]);
 
-  const apiKeySet = settings.data?.openai.api_key_set ?? false;
-  const errors = useMemo(() => (form ? validateForm(form, apiKey, apiKeySet) : {}), [apiKey, apiKeySet, form]);
-  const isDirty = Boolean(form && baseline && (!formsEqual(form, baseline) || apiKey.trim()));
+  const errors = useMemo(() => (form ? validateForm(form) : {}), [form]);
+  const isDirty = Boolean(form && baseline && !formsEqual(form, baseline));
   const isValid = Boolean(form && Object.keys(errors).length === 0);
 
   function replaceForm(nextSettings: Settings) {
     const next = toForm(nextSettings);
     setForm(next);
     setBaseline(next);
-    setApiKey("");
   }
 
   async function reload() {
@@ -173,23 +136,10 @@ export function SettingsPage() {
 
   function submit() {
     if (!form || !baseline || !isDirty || !isValid) return;
-    const payload: SettingsInput = {
-      use_mock_ocr: form.use_mock_ocr,
+    save.mutate({
       request_timeout_seconds: form.request_timeout_seconds,
       pdf_render_dpi: form.pdf_render_dpi,
-      openai: {
-        base_url: form.base_url,
-        model: form.model,
-        temperature: form.temperature,
-        max_tokens: form.max_tokens,
-        max_image_edge: form.max_image_edge,
-        retry_attempts: form.retry_attempts,
-      },
-    };
-    if (apiKey.trim()) {
-      payload.openai = { ...payload.openai, api_key: apiKey.trim() };
-    }
-    save.mutate(payload);
+    });
   }
 
   function requestReload() {
@@ -200,14 +150,13 @@ export function SettingsPage() {
     void reload();
   }
 
-  const openaiDisabled = form?.use_mock_ocr ?? false;
   const saveDisabled = !isDirty || !isValid || save.isPending || settings.isFetching;
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="设置"
-        description={isDirty ? "存在未保存的更改；检查无误后保存。" : "配置识别引擎、图像处理与提示词。"}
+        description={isDirty ? "存在未保存的更改；检查无误后保存。" : "配置识别接口、模型、图像处理与提示词。"}
       >
         <Button variant="secondary" disabled={settings.isFetching || save.isPending} onClick={requestReload}>
           {settings.isFetching ? <Spinner /> : <RefreshCw />}
@@ -235,116 +184,7 @@ export function SettingsPage() {
         </Card>
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>识别引擎</CardTitle>
-              <CardDescription>选择模拟模式，或配置 OpenAI 兼容的视觉模型。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FieldGroup>
-                <Field orientation="horizontal">
-                  <FieldContent>
-                    <FieldTitle>使用模拟识别</FieldTitle>
-                    <FieldDescription>开启后不调用真实模型，仅返回占位文本，适合本地联调。</FieldDescription>
-                  </FieldContent>
-                  <Switch
-                    id="use-mock-ocr"
-                    aria-label="使用模拟识别"
-                    checked={form.use_mock_ocr}
-                    onCheckedChange={(checked) => setField("use_mock_ocr", checked)}
-                  />
-                </Field>
-
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                  <Field data-disabled={openaiDisabled} data-invalid={Boolean(errors.base_url)}>
-                    <FieldLabel htmlFor="base-url">Base URL</FieldLabel>
-                    <Input
-                      id="base-url"
-                      disabled={openaiDisabled}
-                      aria-invalid={Boolean(errors.base_url)}
-                      placeholder="https://api.openai.com/v1"
-                      value={form.base_url}
-                      onChange={(event) => setField("base_url", event.target.value)}
-                    />
-                    <FieldError>{errors.base_url}</FieldError>
-                  </Field>
-                  <Field data-disabled={openaiDisabled} data-invalid={Boolean(errors.model)}>
-                    <FieldLabel htmlFor="model">模型</FieldLabel>
-                    <Input
-                      id="model"
-                      disabled={openaiDisabled}
-                      aria-invalid={Boolean(errors.model)}
-                      placeholder="如 gpt-4o-mini"
-                      value={form.model}
-                      onChange={(event) => setField("model", event.target.value)}
-                    />
-                    <FieldError>{errors.model}</FieldError>
-                  </Field>
-                </FieldGroup>
-
-                <Field data-disabled={openaiDisabled} data-invalid={Boolean(errors.api_key)}>
-                  <FieldLabel htmlFor="api-key">API Key</FieldLabel>
-                  <Input
-                    id="api-key"
-                    type="password"
-                    autoComplete="new-password"
-                    disabled={openaiDisabled}
-                    aria-invalid={Boolean(errors.api_key)}
-                    placeholder={apiKeySet ? "已配置（留空则保持不变）" : "输入新的 API Key"}
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                  <FieldDescription>密钥不会被回显；只有输入新密钥时才会更新。</FieldDescription>
-                  <FieldError>{errors.api_key}</FieldError>
-                </Field>
-
-                <FieldGroup className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <NumberField
-                    id="temperature"
-                    label="Temperature"
-                    disabled={openaiDisabled}
-                    error={errors.temperature}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    value={form.temperature}
-                    onChange={(value) => setField("temperature", value)}
-                  />
-                  <NumberField
-                    id="max-tokens"
-                    label="Max Tokens"
-                    disabled={openaiDisabled}
-                    error={errors.max_tokens}
-                    min={1}
-                    step={1}
-                    value={form.max_tokens}
-                    onChange={(value) => setField("max_tokens", value)}
-                  />
-                  <NumberField
-                    id="max-image-edge"
-                    label="最大图像边长"
-                    hint="0 表示不缩放。"
-                    disabled={openaiDisabled}
-                    error={errors.max_image_edge}
-                    min={0}
-                    step={1}
-                    value={form.max_image_edge}
-                    onChange={(value) => setField("max_image_edge", value)}
-                  />
-                  <NumberField
-                    id="retry-attempts"
-                    label="重试次数"
-                    disabled={openaiDisabled}
-                    error={errors.retry_attempts}
-                    min={0}
-                    step={1}
-                    value={form.retry_attempts}
-                    onChange={(value) => setField("retry_attempts", value)}
-                  />
-                </FieldGroup>
-              </FieldGroup>
-            </CardContent>
-          </Card>
+          <LLMProvidersCard />
 
           <Card>
             <CardHeader>
@@ -378,7 +218,6 @@ export function SettingsPage() {
             </CardContent>
           </Card>
 
-          <RecognizerProfilesCard />
           <ProviderAdaptersCard />
           <PromptLibraryCard settings={settings.data} />
         </>
@@ -388,7 +227,7 @@ export function SettingsPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>放弃未保存的更改？</AlertDialogTitle>
-            <AlertDialogDescription>重新加载会用服务端最新设置覆盖当前表单，包括尚未保存的 API Key。</AlertDialogDescription>
+            <AlertDialogDescription>重新加载会用服务端最新设置覆盖当前表单。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={settings.isFetching}>继续编辑</AlertDialogCancel>
@@ -409,156 +248,422 @@ export function SettingsPage() {
   );
 }
 
-const defaultProfileParams = `{"temperature":0,"max_tokens":4096,"max_image_edge":0,"retry_attempts":3,"timeout_seconds":120}`;
+const defaultModelParams = `{"temperature":0,"max_tokens":4096,"max_image_edge":0,"retry_attempts":3,"timeout_seconds":120}`;
 
-type ProfileForm = RecognizerProfileInput & { api_key: string };
+type ProviderForm = LLMProviderInput & { api_key: string };
+type ModelForm = LLMModelInput;
 
-function emptyProfileForm(): ProfileForm {
+function emptyProviderForm(): ProviderForm {
   return {
     name: "",
     driver: "openai-compatible",
     base_url: "https://api.openai.com/v1",
     api_key: "",
+  };
+}
+
+function emptyModelForm(): ModelForm {
+  return {
+    name: "",
     model: "",
-    params_json: defaultProfileParams,
+    params_json: defaultModelParams,
     prompt_version_id: "",
     is_default: false,
   };
 }
 
-function RecognizerProfilesCard() {
+function LLMProvidersCard() {
   const queryClient = useQueryClient();
-  const profiles = useQuery({ queryKey: ["recognizer-profiles"], queryFn: listRecognizerProfiles });
+  const providers = useQuery({
+    queryKey: ["llm-providers"],
+    queryFn: () => listLLMProviders(true),
+  });
   const prompts = useQuery({ queryKey: ["prompt-versions"], queryFn: listPromptVersions });
-  const [editingID, setEditingID] = useState("");
-  const [form, setForm] = useState<ProfileForm>(emptyProfileForm);
 
-  const saveProfile = useMutation({
-    mutationFn: (input: ProfileForm) => {
-      const payload: RecognizerProfileInput = { ...input };
-      if (!input.api_key.trim()) delete payload.api_key;
-      return editingID ? updateRecognizerProfile(editingID, payload) : createRecognizerProfile(payload);
+  const [selectedProviderID, setSelectedProviderID] = useState("");
+  const [editingProviderID, setEditingProviderID] = useState("");
+  const [providerForm, setProviderForm] = useState<ProviderForm>(emptyProviderForm);
+  const [editingModelID, setEditingModelID] = useState("");
+  const [modelForm, setModelForm] = useState<ModelForm>(emptyModelForm);
+
+  useEffect(() => {
+    if (!providers.data?.length) return;
+    setSelectedProviderID((current) => {
+      if (providers.data.some((item) => item.id === current)) return current;
+      return providers.data[0].id;
+    });
+  }, [providers.data]);
+
+  const selectedProvider = providers.data?.find((item) => item.id === selectedProviderID) ?? null;
+  const models = selectedProvider?.models ?? [];
+
+  const saveProvider = useMutation({
+    mutationFn: (input: ProviderForm) => {
+      const payload: LLMProviderInput = {
+        name: input.name,
+        driver: input.driver,
+        base_url: input.base_url,
+      };
+      if (input.api_key.trim()) payload.api_key = input.api_key.trim();
+      return editingProviderID ? updateLLMProvider(editingProviderID, payload) : createLLMProvider({ ...payload, api_key: input.api_key.trim() || undefined });
     },
     onSuccess: async (saved) => {
+      await queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
       await queryClient.invalidateQueries({ queryKey: ["recognizer-profiles"] });
-      setEditingID(saved.id);
-      setForm(profileToForm(saved));
-      toast.success("识别器配置已保存", { description: "API Key 已保留但不会回显。" });
+      setEditingProviderID(saved.id);
+      setSelectedProviderID(saved.id);
+      setProviderForm(providerToForm(saved));
+      toast.success("接口已保存", { description: "API Key 已保留但不会回显。" });
     },
-    onError: (error: Error) => toast.error("保存识别器失败", { description: error.message }),
-  });
-  const removeProfile = useMutation({
-    mutationFn: deleteRecognizerProfile,
-    onSuccess: async (_, id) => {
-      await queryClient.invalidateQueries({ queryKey: ["recognizer-profiles"] });
-      if (editingID === id) {
-        setEditingID("");
-        setForm(emptyProfileForm());
-      }
-      toast.success("识别器配置已删除");
-    },
-    onError: (error: Error) => toast.error("删除识别器失败", { description: error.message }),
+    onError: (error: Error) => toast.error("保存接口失败", { description: error.message }),
   });
 
-  function edit(profile: RecognizerProfile) {
-    setEditingID(profile.id);
-    setForm(profileToForm(profile));
+  const removeProvider = useMutation({
+    mutationFn: deleteLLMProvider,
+    onSuccess: async (_, id) => {
+      await queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+      await queryClient.invalidateQueries({ queryKey: ["recognizer-profiles"] });
+      if (selectedProviderID === id) setSelectedProviderID("");
+      if (editingProviderID === id) {
+        setEditingProviderID("");
+        setProviderForm(emptyProviderForm());
+      }
+      toast.success("接口已删除");
+    },
+    onError: (error: Error) => toast.error("删除接口失败", { description: error.message }),
+  });
+
+  const saveModel = useMutation({
+    mutationFn: (input: ModelForm) => {
+      if (!selectedProviderID) throw new Error("请先选择接口");
+      return editingModelID
+        ? updateLLMModel(editingModelID, input)
+        : createLLMModel(selectedProviderID, input);
+    },
+    onSuccess: async (saved) => {
+      await queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+      await queryClient.invalidateQueries({ queryKey: ["recognizer-profiles"] });
+      setEditingModelID(saved.id);
+      setModelForm(modelToForm(saved));
+      toast.success("模型已保存");
+    },
+    onError: (error: Error) => toast.error("保存模型失败", { description: error.message }),
+  });
+
+  const removeModel = useMutation({
+    mutationFn: deleteLLMModel,
+    onSuccess: async (_, id) => {
+      await queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+      await queryClient.invalidateQueries({ queryKey: ["recognizer-profiles"] });
+      if (editingModelID === id) {
+        setEditingModelID("");
+        setModelForm(emptyModelForm());
+      }
+      toast.success("模型已删除");
+    },
+    onError: (error: Error) => toast.error("删除模型失败", { description: error.message }),
+  });
+
+  function editProvider(provider: LLMProvider) {
+    setEditingProviderID(provider.id);
+    setSelectedProviderID(provider.id);
+    setProviderForm(providerToForm(provider));
   }
 
-  const realDriver = form.driver === "openai-compatible";
-  const valid = form.name.trim() && (!realDriver || (form.base_url?.trim() && form.model?.trim() && (editingID || form.api_key.trim())));
+  function newProvider() {
+    setEditingProviderID("");
+    setProviderForm(emptyProviderForm());
+  }
+
+  function editModel(model: RecognizerProfile) {
+    setEditingModelID(model.id);
+    setModelForm(modelToForm(model));
+  }
+
+  function newModel() {
+    setEditingModelID("");
+    setModelForm(emptyModelForm());
+  }
+
+  const realDriver = providerForm.driver === "openai-compatible";
+  const providerValid =
+    providerForm.name.trim()
+    && (!realDriver || (providerForm.base_url?.trim() && (editingProviderID || providerForm.api_key.trim())));
+  const modelValid =
+    Boolean(selectedProviderID)
+    && Boolean(modelForm.name.trim())
+    && (selectedProvider?.driver !== "openai-compatible" || Boolean(modelForm.model?.trim()));
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>识别器 Profiles</CardTitle>
-        <CardDescription>注册多个受控驱动配置，用于按运行选择模型并开展 Prompt A/B；不会加载或执行本地插件代码。</CardDescription>
+        <CardTitle>识别接口与模型</CardTitle>
+        <CardDescription>
+          先配置接口（Base URL + API Key），再在同一接口下添加多个模型。识别时选择模型；密钥只写不回显。
+        </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(22rem,1.2fr)]">
-        <div className="flex flex-col gap-2">
-          <Button variant="secondary" className="justify-start" onClick={() => { setEditingID(""); setForm(emptyProfileForm()); }}>
-            <Plus />新建配置
-          </Button>
-          <ErrorMessage message={profiles.error?.message} />
-          {profiles.data?.map((profile) => (
-            <div key={profile.id} className={cn("flex items-center gap-2 rounded-lg border p-3", editingID === profile.id && "border-primary bg-accent")}>
-              <button type="button" className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-pressed={editingID === profile.id} onClick={() => edit(profile)}>
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <span className="truncate">{profile.name}</span>
-                  {profile.is_default ? <Badge variant="secondary">默认</Badge> : null}
-                </span>
-                <span className="mt-1 block truncate text-xs text-muted-foreground">{profile.driver} · {profile.model || "mock"}</span>
-              </button>
-              <Button variant="ghost" size="icon-sm" aria-label="编辑" onClick={() => edit(profile)}><Pencil /></Button>
-              <Button variant="ghost" size="icon-sm" aria-label="删除" disabled={removeProfile.isPending} onClick={() => removeProfile.mutate(profile.id)}><Trash2 /></Button>
-            </div>
-          ))}
-          {!profiles.isLoading && !profiles.data?.length ? <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">暂无 Profile，识别仍使用旧版全局设置。</p> : null}
+      <CardContent className="grid gap-6 xl:grid-cols-2">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">接口</h3>
+            <Button variant="secondary" size="sm" onClick={newProvider}>
+              <Plus />新建接口
+            </Button>
+          </div>
+          <ErrorMessage message={providers.error?.message} />
+          <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+            {providers.data?.map((provider) => (
+              <div
+                key={provider.id}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border p-3",
+                  selectedProviderID === provider.id && "border-primary bg-accent",
+                )}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => {
+                    setSelectedProviderID(provider.id);
+                    editProvider(provider);
+                  }}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <span className="truncate">{provider.name}</span>
+                    {provider.api_key_set ? <Badge variant="outline">已配置密钥</Badge> : null}
+                  </span>
+                  <span className="mt-1 block truncate text-xs text-muted-foreground">
+                    {provider.driver} · {provider.model_count} 个模型
+                    {provider.base_url ? ` · ${provider.base_url}` : ""}
+                  </span>
+                </button>
+                <Button variant="ghost" size="icon-sm" aria-label="编辑接口" onClick={() => editProvider(provider)}>
+                  <Pencil />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="删除接口"
+                  disabled={removeProvider.isPending}
+                  onClick={() => removeProvider.mutate(provider.id)}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            ))}
+            {!providers.isLoading && !providers.data?.length ? (
+              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                暂无接口。新建 OpenAI 兼容接口或 Mock 后，再添加模型。
+              </p>
+            ) : null}
+          </div>
+
+          <FieldGroup className="rounded-lg border p-4">
+            <Field>
+              <FieldLabel htmlFor="provider-name">接口名称</FieldLabel>
+              <Input
+                id="provider-name"
+                value={providerForm.name}
+                onChange={(event) => setProviderForm((value) => ({ ...value, name: event.target.value }))}
+                placeholder="如 OpenAI / 自建网关"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="provider-driver">驱动</FieldLabel>
+              <Select
+                value={providerForm.driver}
+                onValueChange={(driver) =>
+                  setProviderForm((value) => ({ ...value, driver: driver as ProviderForm["driver"] }))
+                }
+              >
+                <SelectTrigger id="provider-driver"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
+                  <SelectItem value="mock">Mock</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field data-disabled={!realDriver}>
+              <FieldLabel htmlFor="provider-base-url">Base URL</FieldLabel>
+              <Input
+                id="provider-base-url"
+                disabled={!realDriver}
+                value={providerForm.base_url}
+                onChange={(event) => setProviderForm((value) => ({ ...value, base_url: event.target.value }))}
+                placeholder="https://api.openai.com/v1"
+              />
+            </Field>
+            <Field data-disabled={!realDriver}>
+              <FieldLabel htmlFor="provider-api-key">API Key</FieldLabel>
+              <Input
+                id="provider-api-key"
+                type="password"
+                autoComplete="new-password"
+                disabled={!realDriver}
+                placeholder={editingProviderID ? "已配置时留空保持不变" : "输入 API Key"}
+                value={providerForm.api_key}
+                onChange={(event) => setProviderForm((value) => ({ ...value, api_key: event.target.value }))}
+              />
+              <FieldDescription>密钥写入本地 secrets.json，不会出现在列表或运行快照中。</FieldDescription>
+            </Field>
+            <Button
+              className="self-start"
+              disabled={!providerValid || saveProvider.isPending}
+              onClick={() => saveProvider.mutate(providerForm)}
+            >
+              {saveProvider.isPending ? <Spinner /> : <Save />}
+              {saveProvider.isPending ? "保存中" : editingProviderID ? "更新接口" : "创建接口"}
+            </Button>
+          </FieldGroup>
         </div>
 
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="profile-name">名称</FieldLabel>
-            <Input id="profile-name" value={form.name} onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))} />
-          </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">
+              模型
+              {selectedProvider ? (
+                <span className="ml-2 font-normal text-muted-foreground">· {selectedProvider.name}</span>
+              ) : null}
+            </h3>
+            <Button variant="secondary" size="sm" disabled={!selectedProviderID} onClick={newModel}>
+              <Plus />新建模型
+            </Button>
+          </div>
+
+          <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+            {models.map((model) => (
+              <div
+                key={model.id}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border p-3",
+                  editingModelID === model.id && "border-primary bg-accent",
+                )}
+              >
+                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => editModel(model)}>
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <span className="truncate">{model.name}</span>
+                    {model.is_default ? <Badge variant="secondary">默认</Badge> : null}
+                  </span>
+                  <span className="mt-1 block truncate text-xs text-muted-foreground">
+                    {model.model || "mock"}
+                  </span>
+                </button>
+                <Button variant="ghost" size="icon-sm" aria-label="编辑模型" onClick={() => editModel(model)}>
+                  <Pencil />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="删除模型"
+                  disabled={removeModel.isPending}
+                  onClick={() => removeModel.mutate(model.id)}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            ))}
+            {selectedProviderID && !models.length ? (
+              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                该接口下暂无模型。添加模型后即可用于识别与 A/B 实验。
+              </p>
+            ) : null}
+            {!selectedProviderID ? (
+              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">请先选择或创建接口。</p>
+            ) : null}
+          </div>
+
+          <FieldGroup className="rounded-lg border p-4">
             <Field>
-              <FieldLabel htmlFor="profile-driver">驱动</FieldLabel>
-              <Select value={form.driver} onValueChange={(driver) => setForm((value) => ({ ...value, driver: driver as ProfileForm["driver"] }))}>
-                <SelectTrigger id="profile-driver"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="openai-compatible">OpenAI Compatible</SelectItem><SelectItem value="mock">Mock</SelectItem></SelectContent>
+              <FieldLabel htmlFor="model-name">显示名称</FieldLabel>
+              <Input
+                id="model-name"
+                disabled={!selectedProviderID}
+                value={modelForm.name}
+                onChange={(event) => setModelForm((value) => ({ ...value, name: event.target.value }))}
+                placeholder="如 gpt-4o 高精度"
+              />
+            </Field>
+            <Field data-disabled={selectedProvider?.driver !== "openai-compatible"}>
+              <FieldLabel htmlFor="model-id">模型 ID</FieldLabel>
+              <Input
+                id="model-id"
+                disabled={!selectedProviderID || selectedProvider?.driver !== "openai-compatible"}
+                value={modelForm.model}
+                onChange={(event) => setModelForm((value) => ({ ...value, model: event.target.value }))}
+                placeholder="如 gpt-4o-mini"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="model-prompt">默认 Prompt</FieldLabel>
+              <Select
+                value={modelForm.prompt_version_id || "active"}
+                onValueChange={(id) =>
+                  setModelForm((value) => ({ ...value, prompt_version_id: id === "active" ? "" : id }))
+                }
+                disabled={!selectedProviderID}
+              >
+                <SelectTrigger id="model-prompt"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">使用激活版本</SelectItem>
+                  {prompts.data?.map((prompt) => (
+                    <SelectItem key={prompt.id} value={prompt.id}>{prompt.version}</SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </Field>
             <Field>
-              <FieldLabel htmlFor="profile-prompt">默认 Prompt</FieldLabel>
-              <Select value={form.prompt_version_id || "active"} onValueChange={(id) => setForm((value) => ({ ...value, prompt_version_id: id === "active" ? "" : id }))}>
-                <SelectTrigger id="profile-prompt"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="active">使用激活版本</SelectItem>{prompts.data?.map((prompt) => <SelectItem key={prompt.id} value={prompt.id}>{prompt.version}</SelectItem>)}</SelectContent>
-              </Select>
+              <FieldLabel htmlFor="model-params">参数 JSON</FieldLabel>
+              <Textarea
+                id="model-params"
+                className="min-h-28 font-mono text-xs"
+                spellCheck={false}
+                disabled={!selectedProviderID}
+                value={modelForm.params_json}
+                onChange={(event) => setModelForm((value) => ({ ...value, params_json: event.target.value }))}
+              />
             </Field>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field data-disabled={!realDriver}>
-              <FieldLabel htmlFor="profile-base-url">Base URL</FieldLabel>
-              <Input id="profile-base-url" disabled={!realDriver} value={form.base_url} onChange={(event) => setForm((value) => ({ ...value, base_url: event.target.value }))} />
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>设为默认模型</FieldTitle>
+                <FieldDescription>未指定模型时使用此默认；仅全局一个默认。</FieldDescription>
+              </FieldContent>
+              <Switch
+                disabled={!selectedProviderID}
+                checked={Boolean(modelForm.is_default)}
+                onCheckedChange={(checked) => setModelForm((value) => ({ ...value, is_default: checked }))}
+              />
             </Field>
-            <Field data-disabled={!realDriver}>
-              <FieldLabel htmlFor="profile-model">模型</FieldLabel>
-              <Input id="profile-model" disabled={!realDriver} value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} />
-            </Field>
-          </div>
-          <Field data-disabled={!realDriver}>
-            <FieldLabel htmlFor="profile-api-key">API Key</FieldLabel>
-            <Input id="profile-api-key" type="password" disabled={!realDriver} autoComplete="new-password" placeholder={editingID ? "已配置时留空保持不变" : "输入 API Key"} value={form.api_key} onChange={(event) => setForm((value) => ({ ...value, api_key: event.target.value }))} />
-            <FieldDescription>密钥仅写入本地配置库，不会出现在列表、运行快照或 API 响应中。</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="profile-params">参数 JSON</FieldLabel>
-            <Textarea id="profile-params" className="min-h-28 font-mono text-xs" spellCheck={false} value={form.params_json} onChange={(event) => setForm((value) => ({ ...value, params_json: event.target.value }))} />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldContent><FieldTitle>设为默认 Profile</FieldTitle><FieldDescription>旧版空请求也会选择这个 Profile；未设置时继续使用全局 Settings。</FieldDescription></FieldContent>
-            <Switch checked={Boolean(form.is_default)} onCheckedChange={(checked) => setForm((value) => ({ ...value, is_default: checked }))} />
-          </Field>
-          <Button className="self-start" disabled={!valid || saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>
-            {saveProfile.isPending ? <Spinner /> : <Save />}{saveProfile.isPending ? "保存中" : editingID ? "更新 Profile" : "创建 Profile"}
-          </Button>
-        </FieldGroup>
+            <Button
+              className="self-start"
+              disabled={!modelValid || saveModel.isPending}
+              onClick={() => saveModel.mutate(modelForm)}
+            >
+              {saveModel.isPending ? <Spinner /> : <Save />}
+              {saveModel.isPending ? "保存中" : editingModelID ? "更新模型" : "创建模型"}
+            </Button>
+          </FieldGroup>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-function profileToForm(profile: RecognizerProfile): ProfileForm {
+function providerToForm(provider: LLMProvider): ProviderForm {
   return {
-    name: profile.name,
-    driver: profile.driver,
-    base_url: profile.base_url,
+    name: provider.name,
+    driver: provider.driver,
+    base_url: provider.base_url || "https://api.openai.com/v1",
     api_key: "",
-    model: profile.model,
-    params_json: profile.params_json || defaultProfileParams,
-    prompt_version_id: profile.prompt_version_id || "",
-    is_default: profile.is_default,
+  };
+}
+
+function modelToForm(model: RecognizerProfile): ModelForm {
+  return {
+    name: model.name,
+    model: model.model,
+    params_json: model.params_json || defaultModelParams,
+    prompt_version_id: model.prompt_version_id || "",
+    is_default: model.is_default,
   };
 }
 
